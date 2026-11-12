@@ -1,0 +1,9 @@
+<Solution>
+  <Project Path="AssetManager.Shared/AssetManager.Shared.csproj" />
+  <Project Path="AssetManager.Web/AssetManager.Web.csproj">
+    <Deploy />
+  </Project>
+  <Project Path="AssetManager/AssetManager.csproj">
+    <Deploy />
+  </Project>
+</Solution>
