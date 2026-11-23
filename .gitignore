@@ -9,3 +9,10 @@ obj/
 
 # OS-generated files
 .DS_Store
+
+# Downloaded at build time (pinned, hash-verified)
+AssetManager.Processing/native/ffmpeg/
+AssetManager.AI/native/llama/
+
+# Test run output
+TestResults/

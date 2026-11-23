@@ -1,5 +1,10 @@
 <Solution>
+  <Project Path="AssetManager.AI/AssetManager.AI.csproj" />
+  <Project Path="AssetManager.Core/AssetManager.Core.csproj" />
+  <Project Path="AssetManager.Data/AssetManager.Data.csproj" />
+  <Project Path="AssetManager.Processing/AssetManager.Processing.csproj" />
   <Project Path="AssetManager.Shared/AssetManager.Shared.csproj" />
+  <Project Path="AssetManager.Tests/AssetManager.Tests.csproj" />
   <Project Path="AssetManager.Web/AssetManager.Web.csproj">
     <Deploy />
   </Project>

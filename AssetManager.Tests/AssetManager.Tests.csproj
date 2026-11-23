@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="bunit" Version="2.15.2" />
+    <PackageReference Include="xunit.v3" Version="4.0.3" />
+    <PackageReference Include="System.IO.Hashing" Version="10.0.15" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AssetManager.Core\AssetManager.Core.csproj" />
+    <ProjectReference Include="..\AssetManager.Data\AssetManager.Data.csproj" />
+    <ProjectReference Include="..\AssetManager.Processing\AssetManager.Processing.csproj" />
+    <ProjectReference Include="..\AssetManager.AI\AssetManager.AI.csproj" />
+    <ProjectReference Include="..\AssetManager.Shared\AssetManager.Shared.csproj" />
+  </ItemGroup>
+
+</Project>

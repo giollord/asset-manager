@@ -1,23 +1,119 @@
 ﻿@inherits LayoutComponentBase
+@implements IDisposable
+@inject IAppSettingsStore Settings
+@inject AppStartup Startup
+@inject AssetManager.Core.Platform.FileDropBroker Drops
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
 
-<div class="page">
-    <div class="sidebar">
+<MudThemeProvider @ref="_themeProvider" IsDarkMode="_isDark" />
+<MudPopoverProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
+<JobNotifications />
+<PreviewRenderHost />
+
+<MudLayout>
+    <MudAppBar Elevation="1" Dense="true">
+        <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start" OnClick="() => _drawerOpen = !_drawerOpen" aria-label="Toggle navigation" />
+        <MudText Typo="Typo.h6" Class="ml-2">Asset Manager</MudText>
+        <MudSpacer />
+        <JobsIndicator />
+        <ThemeToggle />
+    </MudAppBar>
+    <MudDrawer @bind-Open="_drawerOpen" ClipMode="DrawerClipMode.Always" Elevation="1" Variant="DrawerVariant.Mini" OpenMiniOnHover="false">
         <NavMenu />
-    </div>
+    </MudDrawer>
+    <MudMainContent>
+        <MudContainer MaxWidth="MaxWidth.False" Class="pa-4">
+            @if (!_started)
+            {
+                <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+                <MudText Class="mt-2">Opening catalog...</MudText>
+            }
+            else
+            {
+                @if (Startup.Error is not null)
+                {
+                    <MudAlert Severity="Severity.Error" Class="mb-4">Startup problem: @Startup.Error.Message</MudAlert>
+                }
+                @Body
+            }
+        </MudContainer>
+    </MudMainContent>
+</MudLayout>
 
-    <main>
-        <div class="top-row px-4">
-            <a href="https://learn.microsoft.com/aspnet/core/" target="_blank">About</a>
-        </div>
+@code {
+    private MudThemeProvider? _themeProvider;
+    private bool _drawerOpen = true;
+    private bool _isDark;
+    private bool _systemDark;
 
-        <article class="content px-4">
-            @Body
-        </article>
-    </main>
-</div>
+    private bool _started;
 
-<div id="blazor-error-ui" data-nosnippet>
-    An unhandled error has occurred.
-    <a href="." class="reload">Reload</a>
-    <span class="dismiss">🗙</span>
-</div>
+    protected override async Task OnInitializedAsync()
+    {
+        Settings.Changed += OnSettingsChanged;
+        Drops.Dropped += OnFilesDropped;
+        _isDark = Settings.Current.Theme == ThemeMode.Dark;
+        await Startup.EnsureStartedAsync();
+        _started = true;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && _themeProvider is not null)
+        {
+            _systemDark = await _themeProvider.GetSystemDarkModeAsync();
+            await _themeProvider.WatchSystemDarkModeAsync(OnSystemDarkChanged);
+            ApplyTheme();
+            try
+            {
+                _selfRef = DotNetObjectReference.Create(this);
+                var module = await JS.InvokeAsync<IJSObjectReference>("import", "./_content/AssetManager.Shared/js/fileDrop.js");
+                await module.InvokeVoidAsync("install", _selfRef);
+            }
+            catch (JSException) { } // drag and drop is optional
+        }
+    }
+
+    private DotNetObjectReference<MainLayout>? _selfRef;
+
+    /// <summary>Dropped files go to the import page, which takes them from the broker.</summary>
+    private void OnFilesDropped() => InvokeAsync(() =>
+    {
+        if (!Nav.Uri.Contains("/import", StringComparison.OrdinalIgnoreCase)) Nav.NavigateTo("import");
+    });
+
+    [JSInvokable]
+    public void DropUnsupported() =>
+        Snackbar.Add("Drag and drop of files needs the desktop app; use the Add buttons instead.", Severity.Info);
+
+    private Task OnSystemDarkChanged(bool dark)
+    {
+        _systemDark = dark;
+        ApplyTheme();
+        return Task.CompletedTask;
+    }
+
+    private void OnSettingsChanged(AppSettings _) => InvokeAsync(ApplyTheme);
+
+    private void ApplyTheme()
+    {
+        _isDark = Settings.Current.Theme switch
+        {
+            ThemeMode.Dark => true,
+            ThemeMode.Light => false,
+            _ => _systemDark,
+        };
+        StateHasChanged();
+    }
+
+    public void Dispose()
+    {
+        Settings.Changed -= OnSettingsChanged;
+        Drops.Dropped -= OnFilesDropped;
+        _selfRef?.Dispose();
+    }
+}

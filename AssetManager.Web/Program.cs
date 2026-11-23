@@ -1,6 +1,7 @@
 using AssetManager.Web.Components;
-using AssetManager.Shared.Services;
+using AssetManager.Core.Platform;
 using AssetManager.Web.Services;
+using AssetManager.Shared;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -8,8 +9,13 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
-// Add device-specific services used by the AssetManager.Shared project
-builder.Services.AddSingleton<IFormFactor, FormFactor>();
+// Platform services the browser cannot provide are stubbed and report "not supported".
+builder.Services.AddSingleton<UnsupportedPlatformServices>();
+builder.Services.AddSingleton<IClipboardFileService>(sp => sp.GetRequiredService<UnsupportedPlatformServices>());
+builder.Services.AddSingleton<IFolderPicker>(sp => sp.GetRequiredService<UnsupportedPlatformServices>());
+builder.Services.AddSingleton<IFilePicker>(sp => sp.GetRequiredService<UnsupportedPlatformServices>());
+builder.Services.AddSingleton<IShellService>(sp => sp.GetRequiredService<UnsupportedPlatformServices>());
+builder.Services.AddAssetManager();
 
 var app = builder.Build();
 

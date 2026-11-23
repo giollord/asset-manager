@@ -1,0 +1,150 @@
+@using AssetManager.Core.Domain
+@using AssetManager.Core.Platform
+@using AssetManager.Processing.Containers
+@using AssetManager.Processing.Export
+@implements IAsyncDisposable
+@inject OriginalMedia Media
+@inject AssetExporter Exporter
+@inject IShellService Shell
+@inject IJSRuntime JS
+@inject UiActions Ui
+
+@*
+    The in-app original viewer (spec "Open original"): an orbit view of a model, the full-resolution image, or the
+    full-length audio or video, plus "open externally" and "reveal". Shown in a dialog.
+*@
+<MudDialog ContentStyle="padding: 0 16px">
+    <DialogContent>
+        <div class="preview-surface original-viewer" style="height: 70vh; display: flex; align-items: center; justify-content: center; border-radius: 4px; overflow: auto">
+            @if (_kind == "model")
+            {
+                <div style="width: 100%; height: 100%"><ModelViewer AssetId="AssetId" Rotation="Rotation" CssHeight="100%" /></div>
+            }
+            else if (_error is not null)
+            {
+                <MudText Typo="Typo.body2" Class="mud-text-secondary pa-4" id="original-error">@_error</MudText>
+            }
+            else if (_url is null)
+            {
+                @if (_kind is not null)
+                {
+                    <MudProgressCircular Indeterminate="true" />
+                }
+                else
+                {
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary pa-4">This type has no in-app viewer. Use "Open externally".</MudText>
+                }
+            }
+            else if (_kind == "image")
+            {
+                <img src="@_url" alt="@Name" id="original-image" @onclick="() => _actualSize = !_actualSize"
+                     style="@(_actualSize ? "max-width: none; cursor: zoom-out" : "max-width: 100%; max-height: 100%; object-fit: contain; cursor: zoom-in")" />
+            }
+            else if (_kind == "audio")
+            {
+                <audio controls autoplay src="@_url" style="width: 90%" id="original-audio"></audio>
+            }
+            else if (_kind == "video")
+            {
+                <video controls autoplay src="@_url" style="max-width: 100%; max-height: 100%" id="original-video"></video>
+            }
+        </div>
+        @if (_content is { } c)
+        {
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                @c.FileName · @Size(c.Bytes.Length)@(c.Converted ? " · converted for display" : "")@(_kind == "image" ? " · click to toggle actual size" : "")
+            </MudText>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton StartIcon="@Icons.Material.Filled.OpenInNew" OnClick="OpenExternallyAsync" id="original-open">Open externally</MudButton>
+        <MudButton StartIcon="@Icons.Material.Filled.FolderOpen" OnClick="RevealAsync" id="original-reveal">@(_inContainer ? "Show container in Explorer" : "Show in Explorer")</MudButton>
+        <MudSpacer />
+        <MudButton OnClick="() => Dialog.Close()">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] public IMudDialogInstance Dialog { get; set; } = null!;
+
+    [Parameter, EditorRequired] public long AssetId { get; set; }
+
+    [Parameter] public AssetType Type { get; set; }
+
+    [Parameter] public string Name { get; set; } = "";
+
+    /// <summary>The model's saved orientation, so the orbit view shows it upright.</summary>
+    [Parameter] public (int X, int Y, int Z) Rotation { get; set; }
+
+    [Parameter] public bool InContainer { get; set; }
+
+    private string? _kind;
+    private OriginalContent? _content;
+    private string? _url;
+    private string? _error;
+    private bool _actualSize;
+    private bool _inContainer;
+    private IJSObjectReference? _module;
+
+    protected override void OnInitialized()
+    {
+        _kind = OriginalMedia.ViewKind(Type);
+        _inContainer = InContainer;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _kind is null or "model") return;
+        try
+        {
+            _content = await Media.LoadAsync(AssetId, Type);
+            _module = await JS.InvokeAsync<IJSObjectReference>("import", "./_content/AssetManager.Shared/js/viewer.js");
+            using var stream = new DotNetStreamReference(new MemoryStream(_content.Bytes));
+            _url = await _module.InvokeAsync<string>("blobUrl", stream, _content.Mime);
+        }
+        catch (OriginalUnavailableException e)
+        {
+            _error = $"The original is not available: {e.Missing} is missing. Connect the drive, or store the asset in the catalog to view it offline.";
+        }
+        catch (Exception e) when (e is IOException or NotSupportedException or InvalidOperationException or ContainerReadException or ImageMagick.MagickException or JSException)
+        {
+            _error = $"The original could not be shown: {e.Message}";
+        }
+        StateHasChanged();
+    }
+
+    /// <summary>Opens the original with the default app; a file inside a container is extracted to the cache first.</summary>
+    private Task OpenExternallyAsync() => Ui.RunAsync(async () =>
+    {
+        using var file = await Exporter.ResolvePrimaryAsync(AssetId);
+        await Shell.OpenAsync(file.Path);
+    });
+
+    /// <summary>Selects the file in Explorer; for a file inside an archive or package, the outermost container file.</summary>
+    private Task RevealAsync() => Ui.RunAsync(async () =>
+    {
+        var path = await Exporter.RevealablePathAsync(AssetId)
+                   ?? throw new InvalidOperationException("The original's drive is not attached.");
+        await Shell.RevealAsync(path);
+    });
+
+    private static string Size(long bytes) => bytes switch
+    {
+        >= 1L << 20 => $"{bytes / (double)(1L << 20):F1} MB",
+        >= 1L << 10 => $"{bytes / 1024.0:F0} KB",
+        _ => $"{bytes} B",
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (_module is not null)
+            {
+                await _module.InvokeVoidAsync("revoke", _url);
+                await _module.DisposeAsync();
+            }
+        }
+        catch (JSDisconnectedException) { }
+    }
+}

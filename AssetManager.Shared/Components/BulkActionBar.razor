@@ -1,0 +1,139 @@
+@using AssetManager.Core.Domain
+@using AssetManager.Core.Jobs
+@using AssetManager.Data.Services
+@using AssetManager.Processing.Export
+@using AssetManager.Processing.Import
+@using AssetManager.Processing.Jobs
+@inject TagService Tags
+@inject DeletionService Deletion
+@inject ReimportService Reimports
+@inject AssetManager.AI.Enrichment.ReenrichService Reenrich
+@inject IJobQueue Jobs
+@inject IDialogService Dialogs
+@inject UiActions Ui
+@inject ISnackbar Snackbar
+
+@* Actions on the assets selected in the grid (spec "Multi-selection and bulk actions"). Long work is queued as jobs. *@
+<MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="bulk-action-bar" id="bulk-actions">
+    <MudTooltip Text="Add tags">
+        <MudIconButton Icon="@Icons.Material.Filled.Sell" Size="Size.Small" OnClick="TagAsync" Disabled="_busy" Class="bulk-tag" />
+    </MudTooltip>
+    <MudTooltip Text="Remove tags">
+        <MudIconButton Icon="@Icons.Material.Outlined.LabelOff" Size="Size.Small" OnClick="UntagAsync" Disabled="_busy" Class="bulk-untag" />
+    </MudTooltip>
+    <MudTooltip Text="Copy files to the clipboard">
+        <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" OnClick="CopyAsync" Disabled="_busy" Class="bulk-copy" />
+    </MudTooltip>
+    <MudTooltip Text="Extract to folder">
+        <MudIconButton Icon="@Icons.Material.Filled.DriveFileMove" Size="Size.Small" OnClick="ExtractAsync" Disabled="_busy" Class="bulk-extract" />
+    </MudTooltip>
+    <MudTooltip Text="Delete from catalog">
+        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="DeleteAsync" Disabled="_busy" Class="bulk-delete" />
+    </MudTooltip>
+    <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" Dense="true" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Class="bulk-more"
+             Disabled="_busy">
+        <MudMenuItem Icon="@Icons.Material.Filled.Refresh" OnClick="() => ReimportAsync(false)" Class="bulk-reimport">Re-import</MudMenuItem>
+        <MudMenuItem Icon="@Icons.Material.Filled.Refresh" OnClick="() => ReimportAsync(true)" Class="bulk-reimport-ai">Re-import and re-enrich</MudMenuItem>
+        <MudMenuItem Icon="@Icons.Material.Filled.AutoAwesome" OnClick="ReenrichAsync" Class="bulk-reenrich">Re-enrich with AI</MudMenuItem>
+        <MudMenuItem Icon="@Icons.Material.Filled.Image" OnClick="RegenerateAsync" Class="bulk-regenerate">Regenerate previews</MudMenuItem>
+        <MudDivider />
+        <MudMenuItem Icon="@Icons.Material.Filled.Archive" OnClick="StoreAsync" Class="bulk-store">Store originals in catalog</MudMenuItem>
+        <MudMenuItem Icon="@Icons.Material.Outlined.Unarchive" OnClick="UnstoreAsync" Class="bulk-unstore">Remove stored copies</MudMenuItem>
+    </MudMenu>
+</MudStack>
+
+@code {
+    /// <summary>The selected asset ids.</summary>
+    [Parameter, EditorRequired] public IReadOnlyCollection<long> Selection { get; set; } = [];
+
+    /// <summary>Raised after the selection's assets were removed from the catalog (the page clears the selection).</summary>
+    [Parameter] public EventCallback OnDeleted { get; set; }
+
+    private bool _busy;
+
+    private long[] Ids => [.. Selection];
+
+    private static string Assets(int n) => n == 1 ? "1 asset" : $"{n:N0} assets";
+
+    private async Task TagAsync()
+    {
+        var all = await Tags.GetUsageAsync();
+        var tags = await AskTagsAsync("Add tags", $"Tags to add to {Assets(Selection.Count)}. Assets that already carry a tag keep it.", "Add", true, all);
+        if (tags is null) return;
+        await Run(() => Tags.AddTagsAsync(Ids, tags, TagOrigin.User), $"Tagged {Assets(Selection.Count)} with {string.Join(", ", tags)}.");
+    }
+
+    private async Task UntagAsync()
+    {
+        var present = await Tags.TagsOfAsync(Ids);
+        var tags = await AskTagsAsync("Remove tags", $"Pick the tags to remove from {Assets(Selection.Count)}. The numbers say how many of them carry each tag.", "Remove", false, present);
+        if (tags is null) return;
+        await Run(() => Tags.RemoveTagsAsync(Ids, tags), $"Removed {string.Join(", ", tags)} from {Assets(Selection.Count)}.");
+    }
+
+    private async Task<List<string>?> AskTagsAsync(string title, string message, string confirm, bool allowNew, IReadOnlyList<TagUsage> existing)
+    {
+        var parameters = new DialogParameters<TagDialog>
+        {
+            { d => d.Message, message }, { d => d.ConfirmText, confirm }, { d => d.AllowNew, allowNew }, { d => d.Existing, existing },
+        };
+        var dialog = await Dialogs.ShowAsync<TagDialog>(title, parameters, new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var result = await dialog.Result;
+        return result is { Canceled: false, Data: List<string> tags } && tags.Count > 0 ? tags : null;
+    }
+
+    /// <summary>Spec "Delete requires confirmation": nothing is removed unless the user confirms.</summary>
+    private async Task DeleteAsync()
+    {
+        var count = Selection.Count;
+        var ok = await Dialogs.ShowMessageBoxAsync("Delete from catalog",
+            $"Delete {Assets(count)} from the catalog? Their previews, tags and stored copies are removed too. The original files on disk are not touched.",
+            yesText: $"Delete {Assets(count)}", cancelText: "Cancel");
+        if (ok != true) return;
+        if (await Run(async () => { await Deletion.DeleteAssetsAsync(Ids); }, $"Deleted {Assets(count)}."))
+            await OnDeleted.InvokeAsync();
+    }
+
+    private Task CopyAsync() =>
+        Run(() => Jobs.EnqueueAsync(JobTypes.Copy, $"Copy {Assets(Selection.Count)} to the clipboard", new AssetsPayload(Ids)),
+            "Preparing the files; they will be on the clipboard when the job finishes.");
+
+    private async Task ExtractAsync()
+    {
+        var dialog = await Dialogs.ShowAsync<ExtractDialog>("Extract to folder", new DialogParameters<ExtractDialog> { { d => d.AssetIds, Ids } },
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        if (await dialog.Result is { Canceled: false, Data: ExtractPayload payload })
+            await Run(() => Jobs.EnqueueAsync(JobTypes.Extract, $"Extract {Assets(payload.AssetIds.Length)} to {payload.TargetFolder}", payload), "Extraction started.");
+    }
+
+    private Task ReimportAsync(bool reenrich)
+    {
+        if (!reenrich || Reenrich.Available) return Run(() => Reimports.StartAsync(Ids, reenrich), "Re-import started.");
+        Snackbar.Add(AssetManager.AI.Enrichment.ReenrichService.Unavailable, Severity.Warning);
+        return Task.CompletedTask;
+    }
+
+    private Task ReenrichAsync() => Run(() => Reenrich.StartAsync(Ids), "AI enrichment queued.");
+
+    private Task RegenerateAsync() =>
+        Run(() => Jobs.EnqueueAsync(JobTypes.RegeneratePreviews, $"Regenerate previews of {Assets(Selection.Count)}", new AssetsPayload(Ids)), "Preview regeneration started.");
+
+    private Task StoreAsync() =>
+        Run(() => Jobs.EnqueueAsync(JobTypes.StoreOriginals, $"Store {Assets(Selection.Count)}", new AssetsPayload(Ids)), "Storing the originals in the catalog…");
+
+    private Task UnstoreAsync() =>
+        Run(() => Jobs.EnqueueAsync(JobTypes.RemoveStoredOriginals, $"Remove stored copies of {Assets(Selection.Count)}", new AssetsPayload(Ids)), "Removing the stored copies…");
+
+    private async Task<bool> Run(Func<Task> action, string message)
+    {
+        _busy = true;
+        try
+        {
+            return await Ui.RunAsync(action, message);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

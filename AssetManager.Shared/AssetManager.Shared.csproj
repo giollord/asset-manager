@@ -11,7 +11,15 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.15" />
+    <PackageReference Include="MudBlazor" Version="9.12.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AssetManager.Core\AssetManager.Core.csproj" />
+    <ProjectReference Include="..\AssetManager.Data\AssetManager.Data.csproj" />
+    <ProjectReference Include="..\AssetManager.Processing\AssetManager.Processing.csproj" />
+    <ProjectReference Include="..\AssetManager.AI\AssetManager.AI.csproj" />
   </ItemGroup>
 
 </Project>

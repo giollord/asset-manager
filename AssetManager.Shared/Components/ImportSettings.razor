@@ -1,0 +1,110 @@
+@using System.ComponentModel.DataAnnotations
+@using AssetManager.Core.Domain
+@using AssetManager.Processing.Settings
+@inject IAppSettingsStore Settings
+@inject ClassificationSettings Classification
+@inject UiActions Ui
+@inject ISnackbar Snackbar
+
+@* Import defaults, the extraction cache and file classification (spec "Settings"). *@
+<MudPaper Class="pa-4" Outlined="true" id="import-settings">
+    <MudText Typo="Typo.h6" Class="mb-2">Import</MudText>
+    <MudGrid Spacing="2">
+        <MudItem xs="12" md="6">
+            <MudSelect T="AiDepth" Value="Settings.Current.DefaultAiDepth" ValueChanged="v => Settings.Update(s => s.DefaultAiDepth = v)" Label="Default AI depth"
+                       Margin="Margin.Dense" Dense="true" HelperText="What a new import starts with; each import can change it." id="default-ai-depth">
+                <MudSelectItem Value="AiDepth.Full">Full AI enrichment</MudSelectItem>
+                <MudSelectItem Value="AiDepth.PackOnly">Pack summary only</MudSelectItem>
+                <MudSelectItem Value="AiDepth.None">No AI</MudSelectItem>
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="12" md="6">
+            <MudNumericField T="int" Value="Settings.Current.MaxNestingDepth" ValueChanged="v => Settings.Update(s => s.MaxNestingDepth = v)" Min="0" Max="10"
+                             Label="Maximum nesting depth" HelperText="How many container levels are opened (zip → package → …). Default 5." Margin="Margin.Dense" id="nesting-depth" />
+        </MudItem>
+        <MudItem xs="12" md="6">
+            <MudNumericField T="long" Value="Settings.Current.CacheMaxSizeMb / 1024" ValueChanged="v => Settings.Update(s => s.CacheMaxSizeMb = Math.Max(1, v) * 1024)" Min="1" Max="2048"
+                             Label="Extraction cache limit (GB)" HelperText="Files extracted from archives and packages; the least recently used go first. Default 20 GB."
+                             Margin="Margin.Dense" id="cache-limit" />
+        </MudItem>
+        <MudItem xs="12" md="6">
+            <MudNumericField T="int" Value="Settings.Current.CacheMaxAgeDays" ValueChanged="v => Settings.Update(s => s.CacheMaxAgeDays = v)" Min="1" Max="365"
+                             Label="Remove cached files unused for (days)" HelperText="Default 14 days." Margin="Margin.Dense" id="cache-age" />
+        </MudItem>
+    </MudGrid>
+
+    <MudText Typo="Typo.subtitle2" Class="mt-4">File classification</MudText>
+    <MudText Typo="Typo.caption" Class="mud-text-secondary">
+        Script and project files are listed in the source notes but not imported. Ignored files are skipped silently. Separate extensions with spaces or commas.
+        Saved changes apply to new imports.
+    </MudText>
+    <MudTextField @bind-Value="_scripts" Label="Script and project extensions" Lines="3" AutoGrow="true" Margin="Margin.Dense" id="script-extensions" />
+    <MudTextField @bind-Value="_ignored" Label="Ignored extensions" Lines="2" AutoGrow="true" Margin="Margin.Dense" id="ignored-extensions" />
+    <MudTextField @bind-Value="_folders" Label="Ignored folders (one per line)" Lines="4" AutoGrow="true" Margin="Margin.Dense" id="ignored-folders"
+                  HelperText="Skipped by every import unless the import turns them off. A name (node_modules) matches at any depth; a path with / (Assets/*/Demo) matches from the root of the imported folder, archive or package. * is a wildcard." />
+    @if (_error is not null)
+    {
+        <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2" id="classification-error">@_error</MudAlert>
+    }
+    <MudStack Row="true" Spacing="2" Class="mt-2">
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveAsync" Disabled="!Changed" id="classification-save">Save</MudButton>
+        <MudButton Variant="Variant.Text" OnClick="ResetAsync" id="classification-reset">Reset to defaults</MudButton>
+    </MudStack>
+</MudPaper>
+
+@code {
+    private ClassificationOptions _saved = new();
+    private string _scripts = "", _ignored = "", _folders = "";
+    private string? _error;
+
+    private bool Changed => _scripts != Join(_saved.ScriptExtensions) || _ignored != Join(_saved.IgnoredExtensions)
+                            || _folders != string.Join("\n", _saved.IgnoredFolders);
+
+    protected override async Task OnInitializedAsync() => Show(await Classification.GetAsync());
+
+    private void Show(ClassificationOptions options)
+    {
+        _saved = options;
+        _scripts = Join(options.ScriptExtensions);
+        _ignored = Join(options.IgnoredExtensions);
+        _folders = string.Join("\n", options.IgnoredFolders);
+        _error = null;
+    }
+
+    private static string Join(IEnumerable<string> extensions) => string.Join(" ", extensions);
+
+    /// <summary>".CS, js" → [".cs", ".js"]: lower case, a leading dot added, duplicates dropped.</summary>
+    public static List<string> Parse(string text) =>
+        text.Split([' ', ',', ';', '\n', '\r', '\t'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(e => e.Trim().ToLowerInvariant())
+            .Select(e => e.StartsWith('.') ? e : "." + e)
+            .Distinct().ToList();
+
+    /// <summary>One rule per line (or comma-separated); folder names may contain spaces.</summary>
+    public static List<string> ParseFolders(string text) =>
+        text.Split(['\n', '\r', ','], StringSplitOptions.RemoveEmptyEntries)
+            .Select(AssetManager.Processing.Containers.FolderIgnoreRules.Normalize)
+            .Where(r => r.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+    private async Task SaveAsync()
+    {
+        var options = _saved with { ScriptExtensions = Parse(_scripts), IgnoredExtensions = Parse(_ignored), IgnoredFolders = ParseFolders(_folders) };
+        try
+        {
+            await Classification.SaveAsync(options);
+            Show(options);
+            Snackbar.Add("File classification saved; it applies to new imports.", Severity.Success);
+        }
+        catch (ValidationException e)
+        {
+            _error = e.Message;
+        }
+    }
+
+    private async Task ResetAsync()
+    {
+        await Classification.ResetAsync();
+        Show(await Classification.GetAsync());
+    }
+}

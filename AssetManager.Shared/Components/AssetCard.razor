@@ -1,0 +1,152 @@
+@using AssetManager.Core.Domain
+@implements IDisposable
+
+@* One asset tile: preview on the theme's preview surface, name, type, selection checkbox and extra badges. *@
+<MudPaper Outlined="true" Class="@CardClass" Style="width: 168px" data-id="@AssetId">
+    <div class="preview-surface asset-card-preview" style="height: 136px; display: flex; align-items: center; justify-content: center; cursor: pointer; position: relative"
+         @onclick="OnPreviewClick" @ondblclick="OnPreviewDoubleClick" @onmouseenter="StartCycling" @onmouseleave="StopCycling">
+        @if (_hover is not null)
+        {
+            <img src="@_hover" alt="@Name" class="asset-card-animation" style="max-width: 100%; max-height: 136px; object-fit: contain" />
+        }
+        else if (_views is { Count: > 1 } && _viewIndex > 0)
+        {
+            <img src="@_views[_viewIndex]" alt="@Name" class="asset-card-view" data-view="@_viewIndex" style="max-width: 100%; max-height: 136px; object-fit: contain" />
+        }
+        else if (_preview is not null)
+        {
+            <img src="@_preview" alt="@Name" style="max-width: 100%; max-height: 136px; object-fit: contain" />
+        }
+        else
+        {
+            <MudIcon Icon="@TypeIcon(Type)" Size="Size.Large" Class="mud-text-secondary" />
+        }
+        @if (Overlay is not null)
+        {
+            <div class="asset-card-overlay" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">@Overlay</div>
+        }
+    </div>
+    <div class="pa-1">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="0">
+            @if (Selectable)
+            {
+                <MudCheckBox T="bool" Value="Selected" ValueChanged="v => SelectedChanged.InvokeAsync(v)" Size="Size.Small" Dense="true" Class="asset-select" />
+            }
+            <MudText Typo="Typo.body2" Class="asset-card-name" Style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap" title="@Name">@Name</MudText>
+        </MudStack>
+        <MudStack Row="true" Spacing="1" Wrap="Wrap.Wrap" Class="px-1">
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">@Type</MudText>
+            @Badges
+        </MudStack>
+    </div>
+</MudPaper>
+
+@code {
+    [Parameter, EditorRequired] public long AssetId { get; set; }
+
+    [Parameter] public string Name { get; set; } = "";
+
+    [Parameter] public AssetType Type { get; set; }
+
+    /// <summary>Loads the preview as a URL (e.g. a data URL); null shows the type icon.</summary>
+    [Parameter] public Func<long, Task<string?>>? PreviewUrl { get; set; }
+
+    /// <summary>Changes when the preview should be loaded again (e.g. after regrouping).</summary>
+    [Parameter] public int PreviewVersion { get; set; }
+
+    [Parameter] public bool Selectable { get; set; }
+
+    [Parameter] public bool Selected { get; set; }
+
+    [Parameter] public EventCallback<bool> SelectedChanged { get; set; }
+
+    /// <summary>Shown faded (e.g. excluded from an import).</summary>
+    [Parameter] public bool Dimmed { get; set; }
+
+    [Parameter] public RenderFragment? Badges { get; set; }
+
+    /// <summary>Opens the asset: a single click on the preview, or a double click when <see cref="OnClick"/> is set.</summary>
+    [Parameter] public EventCallback<long> OnOpen { get; set; }
+
+    /// <summary>A click on the preview (with modifier keys, for grid selection).</summary>
+    [Parameter] public EventCallback<MouseEventArgs> OnClick { get; set; }
+
+    /// <summary>Loads a model's angles, which cycle while the pointer rests on the preview; for an animation, its animated preview, which plays.</summary>
+    [Parameter] public Func<long, Task<IReadOnlyList<string>>>? ModelViews { get; set; }
+
+    /// <summary>Controls over the preview's corner (e.g. play); clicks on it do not select.</summary>
+    [Parameter] public RenderFragment? Overlay { get; set; }
+
+    /// <summary>Time each model angle shows while cycling.</summary>
+    public static TimeSpan ViewInterval { get; set; } = TimeSpan.FromMilliseconds(700);
+
+    private IReadOnlyList<string>? _views;
+    private string? _hover;
+    private int _viewIndex;
+    private CancellationTokenSource? _cycling;
+
+    private Task OnPreviewClick(MouseEventArgs e) => OnClick.HasDelegate ? OnClick.InvokeAsync(e) : OnOpen.InvokeAsync(AssetId);
+
+    private Task OnPreviewDoubleClick() => OnClick.HasDelegate ? OnOpen.InvokeAsync(AssetId) : Task.CompletedTask;
+
+    private async Task StartCycling()
+    {
+        if (ModelViews is null || Type is not (AssetType.Model3D or AssetType.Animation) || _cycling is not null) return;
+        var cts = _cycling = new CancellationTokenSource();
+        _views ??= await ModelViews(AssetId);
+        if (Type == AssetType.Animation)
+        {
+            if (!cts.IsCancellationRequested) _hover = _views.FirstOrDefault();
+            return;
+        }
+        if (_views.Count < 2) return;
+        try
+        {
+            using var timer = new PeriodicTimer(ViewInterval);
+            while (await timer.WaitForNextTickAsync(cts.Token))
+            {
+                _viewIndex = (_viewIndex + 1) % _views.Count;
+                StateHasChanged();
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private void StopCycling()
+    {
+        _cycling?.Cancel();
+        _cycling = null;
+        _viewIndex = 0;
+        _hover = null;
+    }
+
+    public void Dispose() => _cycling?.Cancel();
+
+    private string? _preview;
+    private (long, int)? _loaded;
+
+    private string CardClass => "asset-card" + (Selected ? " mud-border-primary" : "") + (Dimmed ? " asset-card-dimmed" : "");
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (PreviewUrl is null || _loaded == (AssetId, PreviewVersion)) return;
+        if (_loaded?.Item1 != AssetId)
+        {
+            StopCycling();
+            _views = null;
+        }
+        _loaded = (AssetId, PreviewVersion);
+        _preview = await PreviewUrl(AssetId);
+    }
+
+    public static string TypeIcon(AssetType type) => type switch
+    {
+        AssetType.Model3D => Icons.Material.Filled.ViewInAr,
+        AssetType.Animation => Icons.Material.Filled.DirectionsRun,
+        AssetType.Audio or AssetType.Music => Icons.Material.Filled.MusicNote,
+        AssetType.Video => Icons.Material.Filled.Movie,
+        AssetType.Font => Icons.Material.Filled.FontDownload,
+        AssetType.Document => Icons.Material.Filled.Description,
+        _ => Icons.Material.Filled.Image,
+    };
+}

@@ -1,0 +1,439 @@
+@using AssetManager.Core.Domain
+@using AssetManager.Core.Jobs
+@using AssetManager.Core.Platform
+@using AssetManager.Core.Search
+@using AssetManager.Data.Services
+@using AssetManager.Processing.Jobs
+@using AssetManager.Shared.Services
+@implements IDisposable
+@inject AssetDetailsService Details
+@inject MetadataEditService Edits
+@inject TagService TagEdits
+@inject IJobQueue Jobs
+@inject PreviewCache Previews
+@inject UiActions Ui
+@inject IShellService Shell
+@inject NavigationManager Nav
+@inject AssetManager.Data.CatalogStore Catalog
+@inject IDialogService Dialogs
+
+@* The asset details (spec "Asset details"): previews, metadata, tags, license, provenance, edits and orientation. *@
+<MudDrawer Open="AssetId is not null" OpenChanged="OnOpenChanged" Anchor="Anchor.End" Variant="DrawerVariant.Temporary" Width="560px"
+           Elevation="4" Class="asset-details" id="asset-details">
+    @if (_d is null)
+    {
+        <MudProgressLinear Indeterminate="true" />
+    }
+    else
+    {
+        var a = _d.Asset;
+        <div class="pa-4" style="overflow-y: auto; height: 100%">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                <MudIcon Icon="@AssetCard.TypeIcon(a.Type)" />
+                <MudText Typo="Typo.h6" Style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap" title="@a.Name" id="details-name">@a.Name</MudText>
+                <MudTooltip Text="@(a.IsStored ? "Stored in the catalog — remove the stored copy" : "Store the original in the catalog (works offline)")">
+                    <MudIconButton Icon="@(a.IsStored ? Icons.Material.Filled.Inventory : Icons.Material.Outlined.Inventory2)" Size="Size.Small"
+                                   Color="@(a.IsStored ? Color.Success : Color.Default)" OnClick="ToggleStoredAsync" id="details-store" />
+                </MudTooltip>
+                <MudIconButton Icon="@Icons.Material.Filled.OpenInFull" Size="Size.Small" OnClick="OpenOriginalAsync" title="Open the original" id="details-open" />
+                <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" OnClick="RegenerateAsync" title="Regenerate previews" id="details-regenerate" />
+                <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" OnClick="StartEdit" Disabled="_edit is not null" title="Edit" id="details-edit" />
+                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="CloseAsync" title="Close" id="details-close" />
+            </MudStack>
+            <MudText Typo="Typo.caption" HtmlTag="div" Class="mud-text-secondary">
+                @a.Type @Edited(EditedFields.Type) · imported @a.ImportedAt.ToLocalTime().ToString("g") · AI: @a.AiStatus
+            </MudText>
+
+            @* ---- previews ---- *@
+            <div class="mt-3">
+                @if (a.Type is AssetType.Model3D or AssetType.Animation && (_showViewer || _rotation != _savedRotation))
+                {
+                    <ModelViewer AssetId="a.Id" Rotation="_rotation" />
+                }
+                else if (_d.Views.Count > 0)
+                {
+                    <div class="preview-surface" style="height: 320px; display: flex; align-items: center; justify-content: center; border-radius: 4px">
+                        <img src="@_d.Views[Math.Min(_view, _d.Views.Count - 1)].DataUrl" alt="@a.Name" style="max-width: 100%; max-height: 320px; object-fit: contain" id="details-preview" />
+                    </div>
+                    @if (_d.Views.Count > 1)
+                    {
+                        <div style="display: flex; gap: 4px; overflow-x: auto" class="mt-1" id="details-views">
+                            @for (var i = 0; i < _d.Views.Count; i++)
+                            {
+                                var index = i;
+                                <img src="@_d.Views[i].DataUrl" class="preview-surface" @onclick="() => _view = index"
+                                     style="height: 48px; cursor: pointer; border-radius: 2px; outline: @(index == _view ? "2px solid var(--mud-palette-primary)" : "none")" />
+                            }
+                        </div>
+                    }
+                }
+                else
+                {
+                    <MudPaper Outlined="true" Class="pa-6 d-flex justify-center"><MudIcon Icon="@AssetCard.TypeIcon(a.Type)" Size="Size.Large" /></MudPaper>
+                }
+                @if (a.PreviewError is not null)
+                {
+                    <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-1">@a.PreviewError</MudAlert>
+                }
+                @if (_d.HasAudioClip)
+                {
+                    @if (_clip is null)
+                    {
+                        <MudButton StartIcon="@Icons.Material.Filled.PlayArrow" Size="Size.Small" OnClick="LoadClipAsync" Class="mt-1" id="details-play">Play preview</MudButton>
+                    }
+                    else
+                    {
+                        <audio controls autoplay src="@_clip" style="width: 100%" class="mt-1" id="details-audio"></audio>
+                    }
+                }
+            </div>
+
+            @* ---- orientation (models) ---- *@
+            @if (a.Model is { } model)
+            {
+                <MudPaper Outlined="true" Class="pa-2 mt-2" id="details-orientation">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap">
+                        <MudText Typo="Typo.body2" HtmlTag="div" Style="flex: 1">
+                            Orientation: <b>@model.Orientation.Describe()</b>
+                            @if (a.OrientationUncertain) { <MudChip T="string" Size="Size.Small" Color="Color.Warning">uncertain</MudChip> }
+                            else if (!a.OrientationVerified) { <MudChip T="string" Size="Size.Small">not verified</MudChip> }
+                        </MudText>
+                        <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="() => _showViewer = !_showViewer" id="details-3d" Disabled="_rotation != _savedRotation"
+                                   StartIcon="@(_showViewer ? Icons.Material.Filled.Image : Icons.Material.Filled.ViewInAr)">@(_showViewer ? "Renders" : "3D view")</MudButton>
+                    </MudStack>
+                    <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Class="mt-1">
+                        @foreach (var axis in new[] { 'X', 'Y', 'Z' })
+                        {
+                            var ax = axis;
+                            <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined">
+                                <MudButton OnClick="() => Rotate(ax, -90)" Class="@($"rotate-{ax}-minus")" title="@($"Rotate −90° about {ax}")">@ax −90°</MudButton>
+                                <MudButton OnClick="() => Rotate(ax, 90)" Class="@($"rotate-{ax}-plus")" title="@($"Rotate +90° about {ax}")">+90°</MudButton>
+                            </MudButtonGroup>
+                        }
+                    </MudStack>
+                    @if (_rotation != _savedRotation)
+                    {
+                        <MudStack Row="true" Spacing="1" Class="mt-2" AlignItems="AlignItems.Center">
+                            <MudText Typo="Typo.caption" Style="flex: 1">New rotation X @_rotation.X°, Y @_rotation.Y°, Z @_rotation.Z° — shown live above.</MudText>
+                            <MudButton Size="Size.Small" OnClick="() => _rotation = _savedRotation" id="orientation-reset">Reset</MudButton>
+                            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveOrientationAsync" id="orientation-save">Save &amp; re-render</MudButton>
+                        </MudStack>
+                    }
+                </MudPaper>
+            }
+
+            @* ---- manual edit ---- *@
+            @if (_edit is not null)
+            {
+                <MudPaper Outlined="true" Class="pa-3 mt-3" id="details-edit-form">
+                    <MudTextField @bind-Value="_edit.Name" Label="Name" Margin="Margin.Dense" id="details-edit-name" />
+                    <MudSelect T="AssetType" @bind-Value="_edit.Type" Label="Type" Margin="Margin.Dense" Dense="true" id="details-edit-type">
+                        @foreach (var t in Enum.GetValues<AssetType>())
+                        {
+                            <MudSelectItem T="AssetType" Value="t">@t</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudTextField @bind-Value="_edit.Description" Label="Description" Lines="3" AutoGrow="true" Margin="Margin.Dense" id="details-edit-description" />
+                    <MudStack Row="true" Spacing="2">
+                        <MudSelect T="TriState" @bind-Value="_edit.Commercial" Label="Commercial use" Margin="Margin.Dense" Dense="true" id="details-edit-commercial">
+                            <MudSelectItem T="TriState" Value="TriState.Yes">Allowed</MudSelectItem>
+                            <MudSelectItem T="TriState" Value="TriState.No">Not allowed</MudSelectItem>
+                            <MudSelectItem T="TriState" Value="TriState.Unknown">Unknown</MudSelectItem>
+                        </MudSelect>
+                        <MudSelect T="TriState" @bind-Value="_edit.Attribution" Label="Attribution" Margin="Margin.Dense" Dense="true" id="details-edit-attribution">
+                            <MudSelectItem T="TriState" Value="TriState.Yes">Required</MudSelectItem>
+                            <MudSelectItem T="TriState" Value="TriState.No">Not required</MudSelectItem>
+                            <MudSelectItem T="TriState" Value="TriState.Unknown">Unknown</MudSelectItem>
+                        </MudSelect>
+                    </MudStack>
+                    <MudStack Row="true" Justify="Justify.FlexEnd" Spacing="1" Class="mt-2">
+                        <MudButton Size="Size.Small" OnClick="() => _edit = null">Cancel</MudButton>
+                        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveEditAsync" id="details-edit-save">Save</MudButton>
+                    </MudStack>
+                </MudPaper>
+            }
+
+            @* ---- description, tags, license, links ---- *@
+            @if (!string.IsNullOrWhiteSpace(a.Description))
+            {
+                <MudText Typo="Typo.body2" HtmlTag="div" Class="mt-3" id="details-description">@a.Description @Edited(EditedFields.Description)</MudText>
+            }
+            <MudText Typo="Typo.subtitle2" Class="mt-3">Tags</MudText>
+            <TagEditor Tags="_d.Tags" OnAdd="AddTagAsync" OnRemove="RemoveTagAsync" />
+
+            <MudText Typo="Typo.subtitle2" Class="mt-3">License</MudText>
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" id="details-license">
+                <LicenseBadge License="a.HasLicenseOverride ? a.LicenseOverride : a.Source.License" />
+                @if (a.HasLicenseOverride)
+                {
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary">set for this asset</MudText>
+                    <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="ResetLicenseAsync" id="details-license-reset">Use the source's license</MudButton>
+                }
+            </MudStack>
+            @{ var links = a.LinksOverride ?? a.Source.Links; }
+            @if (links.Count > 0)
+            {
+                <MudText Typo="Typo.subtitle2" Class="mt-3">Links</MudText>
+                @foreach (var link in links)
+                {
+                    <div><MudLink Typo="Typo.body2" OnClick="() => OpenLinkAsync(link.Url)" title="@link.Url">@(link.Label ?? link.Url)</MudLink></div>
+                }
+            }
+            @if (a.Source.Store.Url is { } storeUrl)
+            {
+                <div><MudLink Typo="Typo.body2" OnClick="() => OpenLinkAsync(storeUrl)">Asset Store page</MudLink></div>
+            }
+
+            @* ---- provenance and files ---- *@
+            <MudText Typo="Typo.subtitle2" Class="mt-3">Source</MudText>
+            <MudBreadcrumbs Items="_chain" Class="pa-0" id="details-sources">
+                <ItemTemplate Context="item">
+                    <MudLink Typo="Typo.body2" OnClick="() => BrowseSource(long.Parse(item.Href!))">@item.Text</MudLink>
+                </ItemTemplate>
+            </MudBreadcrumbs>
+            <MudSimpleTable Dense="true" Elevation="0" Class="mt-1" id="details-files">
+                <tbody>
+                    @foreach (var f in a.Files.OrderBy(f => f.Role))
+                    {
+                        <tr>
+                            <td style="word-break: break-all"><MudText Typo="Typo.caption">@(f.RelativePath.Length > 0 ? f.RelativePath : f.FileName)</MudText></td>
+                            <td><MudText Typo="Typo.caption">@f.Role</MudText></td>
+                            <td style="white-space: nowrap"><MudText Typo="Typo.caption">@Pages.Dashboard.Bytes(f.Size)</MudText></td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+
+            @* ---- metadata ---- *@
+            <MudText Typo="Typo.subtitle2" Class="mt-3">Details</MudText>
+            <MudSimpleTable Dense="true" Elevation="0" id="details-metadata">
+                <tbody>
+                    @foreach (var (label, value) in Facts(a))
+                    {
+                        <tr><td><MudText Typo="Typo.caption" Class="mud-text-secondary">@label</MudText></td><td><MudText Typo="Typo.caption">@value</MudText></td></tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        </div>
+    }
+</MudDrawer>
+
+@code {
+    [Parameter] public long? AssetId { get; set; }
+
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private sealed class EditModel
+    {
+        public string Name { get; set; } = "";
+        public AssetType Type { get; set; }
+        public string? Description { get; set; }
+        public TriState Commercial { get; set; }
+        public TriState Attribution { get; set; }
+    }
+
+    private AssetDetails? _d;
+    private long? _loaded;
+    private int _view;
+    private bool _showViewer;
+    private string? _clip;
+    private EditModel? _edit;
+    private (int X, int Y, int Z) _rotation, _savedRotation;
+    private List<BreadcrumbItem> _chain = [];
+
+    protected override void OnInitialized() => Catalog.ContentChanged += OnCatalogChanged;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (AssetId == _loaded) return;
+        _loaded = AssetId;
+        _d = null;
+        _view = 0;
+        _showViewer = false;
+        _clip = null;
+        _edit = null;
+        if (AssetId is not null) await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (AssetId is not { } id) return;
+        _d = await Details.LoadAsync(id);
+        if (_d is null)
+        {
+            await CloseAsync();
+            return;
+        }
+        var o = _d.Asset.Model?.Orientation;
+        _savedRotation = _rotation = (o?.RotX ?? 0, o?.RotY ?? 0, o?.RotZ ?? 0);
+        _chain = _d.SourceChain.Select(s => new BreadcrumbItem(s.DisplayName, s.Id.ToString())).ToList();
+    }
+
+    private void OnCatalogChanged() => InvokeAsync(async () =>
+    {
+        if (AssetId is null) return;
+        var pending = _rotation;
+        await LoadAsync();
+        if (pending != _savedRotation && _d?.Asset.Model?.Orientation.DecidedBy != OrientationDecidedBy.User) _rotation = pending;
+        StateHasChanged();
+    });
+
+    private async Task OnOpenChanged(bool open)
+    {
+        if (!open) await CloseAsync();
+    }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private RenderFragment Edited(EditedFields field) => __builder =>
+    {
+        if (_d is not null && _d.Asset.UserEdited.HasFlag(field))
+        {
+            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Class="user-edited" title="Edited by you; the AI will not change it">edited</MudChip>
+        }
+    };
+
+    // ---- orientation ----
+
+    private void Rotate(char axis, int degrees)
+    {
+        static int Wrap(int v) => ((v % 360) + 360) % 360;
+        _rotation = axis switch
+        {
+            'X' => _rotation with { X = Wrap(_rotation.X + degrees) },
+            'Y' => _rotation with { Y = Wrap(_rotation.Y + degrees) },
+            _ => _rotation with { Z = Wrap(_rotation.Z + degrees) },
+        };
+    }
+
+    private async Task SaveOrientationAsync()
+    {
+        var id = _d!.Asset.Id;
+        var r = _rotation;
+        if (await Ui.RunAsync(async () =>
+            {
+                await Details.SetOrientationAsync(id, r.X, r.Y, r.Z);
+                await Jobs.EnqueueAsync(JobTypes.RegeneratePreviews, $"Re-render {_d.Asset.Name}", new AssetsPayload([id]));
+            }, "Orientation saved; the previews are being re-rendered."))
+        {
+            _savedRotation = r;
+        }
+    }
+
+    private Task RegenerateAsync()
+    {
+        var a = _d!.Asset;
+        return Ui.RunAsync(() => Jobs.EnqueueAsync(JobTypes.RegeneratePreviews, $"Regenerate previews of {a.Name}", new AssetsPayload([a.Id])),
+            "Regenerating the previews…");
+    }
+
+    // ---- edits ----
+
+    private void StartEdit()
+    {
+        var a = _d!.Asset;
+        var license = a.HasLicenseOverride ? a.LicenseOverride : a.Source.License;
+        _edit = new EditModel { Name = a.Name, Type = a.Type, Description = a.Description, Commercial = license.Commercial, Attribution = license.Attribution };
+    }
+
+    private async Task SaveEditAsync()
+    {
+        var a = _d!.Asset;
+        var e = _edit!;
+        var license = a.HasLicenseOverride ? a.LicenseOverride : a.Source.License;
+        var licenseChanged = e.Commercial != license.Commercial || e.Attribution != license.Attribution;
+        var update = new AssetUpdate
+        {
+            Name = e.Name != a.Name && !string.IsNullOrWhiteSpace(e.Name) ? e.Name.Trim() : null,
+            Type = e.Type != a.Type ? e.Type : null,
+            Description = e.Description != a.Description ? e.Description ?? "" : null,
+            License = licenseChanged ? WithFlags(license, e.Commercial, e.Attribution) : null,
+        };
+        if (await Ui.RunAsync(() => Edits.EditAssetAsync(a.Id, update), "Saved.")) _edit = null;
+    }
+
+    private static LicenseInfo WithFlags(LicenseInfo license, TriState commercial, TriState attribution)
+    {
+        var copy = license.Clone();
+        copy.Commercial = commercial;
+        copy.Attribution = attribution;
+        return copy;
+    }
+
+    private Task ResetLicenseAsync() => Ui.RunAsync(() => Edits.ResetLicenseToSourceAsync(_d!.Asset.Id));
+
+    private Task AddTagAsync(string tag) => Ui.RunAsync(() => TagEdits.AddTagsAsync([_d!.Asset.Id], [tag], TagOrigin.User));
+
+    private Task RemoveTagAsync(string tag) => Ui.RunAsync(() => TagEdits.RemoveTagsAsync([_d!.Asset.Id], [tag]));
+
+    private Task ToggleStoredAsync()
+    {
+        var a = _d!.Asset;
+        return a.IsStored
+            ? Ui.RunAsync(() => Jobs.EnqueueAsync(JobTypes.RemoveStoredOriginals, $"Remove stored copy of {a.Name}", new AssetsPayload([a.Id])), "Removing the stored copy…")
+            : Ui.RunAsync(() => Jobs.EnqueueAsync(JobTypes.StoreOriginals, $"Store {a.Name}", new AssetsPayload([a.Id])), "Storing the original in the catalog…");
+    }
+
+    // ---- previews, links, navigation ----
+
+    /// <summary>The in-app original viewer (spec "Open original").</summary>
+    private Task OpenOriginalAsync()
+    {
+        var a = _d!.Asset;
+        var parameters = new DialogParameters<OriginalViewer>
+        {
+            { v => v.AssetId, a.Id }, { v => v.Type, a.Type }, { v => v.Name, a.Name }, { v => v.Rotation, _savedRotation },
+            { v => v.InContainer, a.PrimaryFile?.Location.IsInContainer ?? false },
+        };
+        return Dialogs.ShowAsync<OriginalViewer>(a.Name, parameters,
+            new DialogOptions { MaxWidth = MaxWidth.ExtraLarge, FullWidth = true, CloseButton = true, CloseOnEscapeKey = true });
+    }
+
+    private async Task LoadClipAsync() => _clip = await Previews.AudioClipAsync(_d!.Asset.Id);
+
+    private Task OpenLinkAsync(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https"
+            ? Ui.RunAsync(() => Shell.OpenAsync(uri.AbsoluteUri))
+            : Ui.RunAsync(() => throw new InvalidOperationException($"Only web links can be opened: {url}"));
+
+    private async Task BrowseSource(long sourceId)
+    {
+        await CloseAsync();
+        Nav.NavigateTo("browse?q=" + new SearchQuery { SourceId = sourceId }.ToToken());
+    }
+
+    /// <summary>Type-specific facts as label/value rows.</summary>
+    private static IEnumerable<(string, string)> Facts(Asset a)
+    {
+        if (a.Model is { } m)
+        {
+            yield return ("Geometry", $"{m.Vertices:N0} vertices, {m.Triangles:N0} triangles, {m.Meshes} meshes, {m.Materials} materials");
+            if (m.Bones > 0) yield return ("Skeleton", $"{m.Bones} bones");
+            if (m.Animations.Count > 0)
+                yield return (m.Animations.Count == 1 ? "Clip" : "Clips", string.Join(", ", m.Animations.Select((n, i) =>
+                    i < m.AnimationSeconds.Count ? $"{n} ({m.AnimationSeconds[i]:0.##} s)" : n)));
+            var size = m.Transform.SizeMeters;
+            yield return ("Size", $"{size[0]:0.###} × {size[1]:0.###} × {size[2]:0.###} m");
+            yield return ("Scale", $"unit scale {m.Transform.UnitScale:0.####}, root scale {string.Join(" × ", m.Transform.RootScale.Select(s => s.ToString("0.###")))}"
+                + (m.Transform.Anomaly != ScaleAnomaly.None ? $" — {m.Transform.Anomaly}" : ""));
+            yield return ("Up axis", m.Transform.SourceUpAxis ?? "not declared");
+            if (m.MissingTextures.Count > 0) yield return ("Missing textures", string.Join(", ", m.MissingTextures));
+            yield return ("Format", m.Format);
+        }
+        if (a.Image is { } i)
+        {
+            yield return ("Image", $"{i.Width} × {i.Height}, {i.Format}{(i.HasAlpha ? ", transparent" : "")}{(i.IsPixelArt ? ", pixel art" : "")}");
+            if (i.Frames is > 1) yield return ("Frames", i.Frames.Value.ToString());
+        }
+        if (a.Audio is { } au)
+            yield return ("Audio", $"{TimeSpan.FromSeconds(au.DurationSeconds):m\\:ss\\.f}, {au.SampleRate} Hz, {au.Channels} ch, {au.Codec}");
+        if (a.Video is { } v) yield return ("Video", v.ToString().Replace("VideoMetadata", "").Trim('{', '}', ' '));
+        if (a.Font is { } f) yield return ("Font", f.ToString().Replace("FontMetadata", "").Trim('{', '}', ' '));
+        if (a.Document is { } d) yield return ("Document", $"{d.Format}{(d.Pages is { } p ? $", {p} pages" : "")}");
+        if (a.Style.Count > 0) yield return ("Style", string.Join(", ", a.Style));
+        if (a.Colors.Count > 0) yield return ("Colors", string.Join(", ", a.Colors.Select(c => c.Name)));
+        if (a.AiError is not null) yield return ("AI error", a.AiError);
+    }
+
+    public void Dispose() => Catalog.ContentChanged -= OnCatalogChanged;
+}

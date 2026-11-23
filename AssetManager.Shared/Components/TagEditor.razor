@@ -1,0 +1,44 @@
+@using AssetManager.Core.Domain
+
+@* Tags of one or more assets. User tags are filled chips, import and AI tags outlined; all can be removed. *@
+<div class="tag-editor">
+    @foreach (var tag in Tags)
+    {
+        <MudChip T="string" Size="Size.Small" Text="@tag.Name" Value="tag.Name" title="@OriginText(tag.Origin)"
+                 Variant="@(tag.Origin == TagOrigin.User ? Variant.Filled : Variant.Outlined)"
+                 Color="@(tag.Origin == TagOrigin.AI ? Color.Info : tag.Origin == TagOrigin.User ? Color.Primary : Color.Default)"
+                 OnClose="@(ReadOnly ? null : (MudChip<string> _) => OnRemove.InvokeAsync(tag.Name))" />
+    }
+    @if (!ReadOnly)
+    {
+        <MudTextField T="string" @bind-Value="_draft" Placeholder="Add tag" Immediate="true" OnKeyDown="OnKeyDown" Margin="Margin.Dense"
+                      Variant="Variant.Text" Class="tag-input" Style="max-width: 160px" />
+    }
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<TagView> Tags { get; set; } = [];
+
+    [Parameter] public bool ReadOnly { get; set; }
+
+    [Parameter] public EventCallback<string> OnAdd { get; set; }
+
+    [Parameter] public EventCallback<string> OnRemove { get; set; }
+
+    private string? _draft;
+
+    private static string OriginText(TagOrigin origin) => origin switch
+    {
+        TagOrigin.User => "Added by you",
+        TagOrigin.AI => "Suggested by the AI",
+        _ => "From the import",
+    };
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key is not ("Enter" or ",") || string.IsNullOrWhiteSpace(_draft)) return;
+        var tag = _draft.Trim().TrimEnd(',');
+        _draft = "";
+        if (tag.Length > 0) await OnAdd.InvokeAsync(tag);
+    }
+}

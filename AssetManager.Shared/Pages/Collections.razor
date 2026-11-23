@@ -1,0 +1,463 @@
+@page "/collections"
+@page "/collections/{Id:long}"
+@using AssetManager.Core.Domain
+@using AssetManager.Core.Jobs
+@using AssetManager.Core.Search
+@using AssetManager.Data.Search
+@using AssetManager.Data.Services
+@using AssetManager.Shared.Services
+@using AssetManager.Processing.Jobs
+@implements IDisposable
+@inject ICatalogStatsService Stats
+@inject CollectionService CollectionData
+@inject AssetSearchService Search
+@inject AssetManager.Data.CatalogStore Catalog
+@inject PreviewCache Previews
+@inject IJobQueue Jobs
+@inject IProgressHub Hub
+@inject IDialogService Dialogs
+@inject UiActions Ui
+@inject NavigationManager Nav
+
+<PageTitle>Collections</PageTitle>
+
+<AssetDetailsDrawer AssetId="_details" OnClose="() => _details = null" />
+
+<MudText Typo="Typo.h4" GutterBottom="true">Collections</MudText>
+
+<MudTabs @bind-ActivePanelIndex="_tab" Elevation="0" PanelClass="pt-3" id="collections-tabs">
+    <MudTabPanel Text="Collections">
+        <div style="display: flex; gap: 16px; align-items: flex-start">
+            <MudPaper Outlined="true" Class="pa-3" Style="width: 340px; flex-shrink: 0; max-height: calc(100vh - 190px); overflow-y: auto" id="collection-list">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" FullWidth="true" OnClick="() => Nav.NavigateTo(NewHref())" id="collection-new">
+                    New collection
+                </MudButton>
+                @if (_collections is null)
+                {
+                    <MudProgressLinear Indeterminate="true" Class="mt-2" />
+                }
+                else if (_collections.Count == 0)
+                {
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary mt-3">
+                        No collections yet. A collection gathers every asset that carries a set of tags, and updates itself as tags change.
+                    </MudText>
+                }
+                else
+                {
+                    <MudList T="long" Dense="true" Class="mt-2">
+                        @foreach (var c in _collections)
+                        {
+                            <MudListItem T="long" OnClick="() => Nav.NavigateTo(Href(c.Id))" Class="@(c.Id == Id ? "collection-row mud-selected-item" : "collection-row")" data-id="@c.Id">
+                                <MudStack Spacing="0">
+                                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                                        <MudText Typo="Typo.body1" Style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">@c.Name</MudText>
+                                        <MudChip T="string" Size="Size.Small" Class="collection-count">@c.Count.ToString("N0")</MudChip>
+                                    </MudStack>
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary collection-types">@TypeSummary(c.ByType)</MudText>
+                                </MudStack>
+                            </MudListItem>
+                        }
+                    </MudList>
+                }
+            </MudPaper>
+
+            <div style="flex: 1; min-width: 0">
+                @if (_edit is null)
+                {
+                    <MudText Typo="Typo.body1" Class="mud-text-secondary mt-4">Select a collection, or create a new one.</MudText>
+                }
+                else
+                {
+                    <MudPaper Outlined="true" Class="pa-4" id="collection-editor">
+                        <MudGrid Spacing="2">
+                            <MudItem xs="12" md="6">
+                                <MudTextField @bind-Value="_edit.Name" Label="Name" Margin="Margin.Dense" id="collection-name" />
+                            </MudItem>
+                            <MudItem xs="12" md="6">
+                                <MudStack Row="true" Justify="Justify.FlexEnd" Spacing="2">
+                                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveAsync" Disabled="!CanSave" id="collection-save">Save</MudButton>
+                                    @if (_edit.Id != 0)
+                                    {
+                                        <MudButton Variant="Variant.Outlined" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete" OnClick="DeleteAsync" id="collection-delete">Delete</MudButton>
+                                    }
+                                </MudStack>
+                            </MudItem>
+                            <MudItem xs="12" md="6">
+                                <MudAutocomplete T="string" Label="Must have tag" SearchFunc="FindTagsAsync" ValueChanged="t => AddRuleTag(t, include: true)" Margin="Margin.Dense"
+                                                 Dense="true" ResetValueOnEmptyText="true" CoerceText="false" CoerceValue="true" Class="rule-include" />
+                            </MudItem>
+                            <MudItem xs="12" md="6">
+                                <MudAutocomplete T="string" Label="Must not have tag" SearchFunc="FindTagsAsync" ValueChanged="t => AddRuleTag(t, include: false)" Margin="Margin.Dense"
+                                                 Dense="true" ResetValueOnEmptyText="true" CoerceText="false" CoerceValue="true" Class="rule-exclude" />
+                            </MudItem>
+                            <MudItem xs="12">
+                                <div id="collection-rule">
+                                    @foreach (var tag in _edit.Include)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Primary" Text="@tag" OnClose="_ => _edit.Include.Remove(tag)" />
+                                    }
+                                    @foreach (var tag in _edit.Exclude)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Outlined" Text="@("not " + tag)" OnClose="_ => _edit.Exclude.Remove(tag)" />
+                                    }
+                                    @if (_edit.Include.Count == 0)
+                                    {
+                                        <MudText Typo="Typo.caption" Class="mud-text-secondary">Add at least one tag that members must have.</MudText>
+                                    }
+                                </div>
+                            </MudItem>
+                            <MudItem xs="12">
+                                <MudTextField @bind-Value="_edit.Description" Label="Description" Lines="3" AutoGrow="true" Margin="Margin.Dense" id="collection-description"
+                                              HelperText="@(_edit.DescriptionOrigin == TextOrigin.AI && _edit.Description == _saved?.Description ? "Written by the AI" : null)" />
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-1">
+                                    <MudButton Variant="Variant.Text" StartIcon="@Icons.Material.Filled.AutoAwesome" OnClick="DescribeAsync"
+                                               Disabled="_edit.Id == 0 || _describeJob is not null || _members?.Total == 0" id="collection-describe">
+                                        Write with AI
+                                    </MudButton>
+                                    @if (_describeJob is not null)
+                                    {
+                                        <MudProgressCircular Indeterminate="true" Size="Size.Small" />
+                                        <MudText Typo="Typo.caption" Class="mud-text-secondary">The AI is writing the description…</MudText>
+                                    }
+                                    else if (_edit.Id == 0)
+                                    {
+                                        <MudText Typo="Typo.caption" Class="mud-text-secondary">Save the collection first.</MudText>
+                                    }
+                                </MudStack>
+                            </MudItem>
+                        </MudGrid>
+                    </MudPaper>
+
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-3" Wrap="Wrap.Wrap">
+                        <MudText Typo="Typo.h6" id="collection-total">@(_members is null ? "…" : $"{_members.Total:N0} assets")</MudText>
+                        @foreach (var t in _byType)
+                        {
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" OnClick="() => Nav.NavigateTo(BrowseHref(t.Query))" Class="collection-type">
+                                @t.Label @t.Count.ToString("N0")
+                            </MudChip>
+                        }
+                        <MudSpacer />
+                        @if (_edit.Include.Count > 0)
+                        {
+                            <MudButton Variant="Variant.Text" EndIcon="@Icons.Material.Filled.ArrowForward" OnClick="() => Nav.NavigateTo(BrowseHref(RuleQuery))" id="collection-browse">Open in Browse</MudButton>
+                        }
+                    </MudStack>
+                    @if (_rulePending)
+                    {
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">Showing the members of the edited rule; save to keep it.</MudText>
+                    }
+
+                    @if (_members is { Total: > 0 })
+                    {
+                        <div style="display: flex; flex-wrap: wrap; gap: 8px" class="mt-2" id="collection-members">
+                            @foreach (var a in _members.Items)
+                            {
+                                <AssetCard @key="a.Id" AssetId="a.Id" Name="@a.Name" Type="a.Type" PreviewUrl="Previews.ThumbnailAsync" ModelViews="Previews.ModelViewsAsync"
+                                           PreviewVersion="_previewVersion" OnOpen="id => { _details = id; return Task.CompletedTask; }" />
+                            }
+                        </div>
+                        @if (Pages > 1)
+                        {
+                            <MudPagination Count="Pages" Selected="_page" SelectedChanged="PageAsync" Class="mt-3" id="collection-pages" />
+                        }
+                    }
+                }
+            </div>
+        </div>
+    </MudTabPanel>
+
+    <MudTabPanel Text="Tags">
+        <MudPaper Outlined="true" Class="pa-3" Style="max-width: 720px">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="3">
+                <MudTextField T="string" @bind-Value="_tagFilter" Immediate="true" Placeholder="Filter tags" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                              Margin="Margin.Dense" Variant="Variant.Outlined" Style="flex: 1" />
+                <MudToggleGroup T="TagSort" @bind-Value="_tagSort" Size="Size.Small" Outlined="true" id="tag-sort">
+                    <MudToggleItem Value="TagSort.Usage" Text="Most used" Class="sort-usage" />
+                    <MudToggleItem Value="TagSort.Name" Text="A–Z" Class="sort-name" />
+                </MudToggleGroup>
+            </MudStack>
+            @if (_tags is null)
+            {
+                <MudProgressLinear Indeterminate="true" Class="mt-2" />
+            }
+            else
+            {
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">@_tags.Count.ToString("N0") tags in use</MudText>
+                <MudSimpleTable Dense="true" Hover="true" Elevation="0" Class="mt-1" id="tag-table">
+                    <thead><tr><th>Tag</th><th style="text-align: right">Assets</th><th></th></tr></thead>
+                    <tbody>
+                        @foreach (var t in SortedTags)
+                        {
+                            <tr class="tag-row" data-tag="@t.Name">
+                                <td><MudLink OnClick="() => Nav.NavigateTo(BrowseHref(t.Query))">@t.Name</MudLink></td>
+                                <td style="text-align: right" class="tag-count">@t.Count.ToString("N0")</td>
+                                <td style="text-align: right; width: 48px">
+                                    <MudTooltip Text="New collection from this tag">
+                                        <MudIconButton Icon="@Icons.Material.Filled.CollectionsBookmark" Size="Size.Small" OnClick="() => NewFromTag(t.Name)" />
+                                    </MudTooltip>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </MudSimpleTable>
+            }
+        </MudPaper>
+    </MudTabPanel>
+</MudTabs>
+
+@code {
+    public const int PageSize = 48;
+
+    public enum TagSort { Usage, Name }
+
+    [Parameter] public long? Id { get; set; }
+
+    [SupplyParameterFromQuery(Name = "tab")] public string? Tab { get; set; }
+
+    /// <summary>A tag to start a new collection with (from the tag list).</summary>
+    [SupplyParameterFromQuery(Name = "tag")] public string? StartTag { get; set; }
+
+    private sealed class EditModel
+    {
+        public long Id { get; set; }
+        public string Name { get; set; } = "";
+        public List<string> Include { get; set; } = [];
+        public List<string> Exclude { get; set; } = [];
+        public string? Description { get; set; }
+        public TextOrigin DescriptionOrigin { get; set; }
+    }
+
+    private int _tab;
+    private IReadOnlyList<CollectionCount>? _collections;
+    private IReadOnlyList<TagCount>? _tags;
+    private string? _tagFilter;
+    private TagSort _tagSort = TagSort.Usage;
+    private Collection? _saved;
+    private EditModel? _edit;
+    private SearchPage? _members;
+    private IReadOnlyList<StatCount> _byType = [];
+    private int _page = 1;
+    private int _previewVersion;
+    private long? _details;
+    private long? _describeJob;
+    private bool _rulePending;
+    private string? _loadedKey;
+    private string _membersKey = "";
+
+    private bool CanSave => _edit is { Include.Count: > 0 } && !string.IsNullOrWhiteSpace(_edit.Name);
+
+    private int Pages => _members is null ? 0 : (_members.Total + PageSize - 1) / PageSize;
+
+    /// <summary>The edited rule as a search; equal to the collection's membership once saved.</summary>
+    private SearchQuery RuleQuery => new() { IncludeTags = [.. _edit!.Include], ExcludeTags = [.. _edit.Exclude] };
+
+    /// <summary>The tags as the list should show them; the default (usage) is the stats service's order.</summary>
+    public IEnumerable<TagCount> SortedTags
+    {
+        get
+        {
+            var tags = string.IsNullOrWhiteSpace(_tagFilter) ? _tags! : _tags!.Where(t => t.Name.Contains(_tagFilter.Trim(), StringComparison.OrdinalIgnoreCase));
+            return _tagSort == TagSort.Name
+                ? tags.OrderBy(t => t.Name, StringComparer.OrdinalIgnoreCase)
+                : tags.OrderByDescending(t => t.Count).ThenBy(t => t.Name, StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        Catalog.ContentChanged += OnCatalogChanged;
+        Hub.Finished += OnJobFinished;
+        await LoadListsAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _tab = string.Equals(Tab, "tags", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+        var key = $"{Id}|{StartTag}|{Tab}";
+        if (key == _loadedKey) return;
+        _loadedKey = key;
+        _page = 1;
+        _saved = null;
+        _edit = null;
+        if (Id is { } id)
+        {
+            _saved = await CollectionData.GetAsync(id);
+            if (_saved is not null) _edit = FromSaved(_saved);
+        }
+        else if (Tab == "new")
+        {
+            var start = string.IsNullOrWhiteSpace(StartTag) ? [] : new List<string> { TagService.Normalize(StartTag) };
+            _edit = new EditModel { Name = start.FirstOrDefault() is { } t ? Capitalize(t) : "", Include = start };
+        }
+        await LoadMembersAsync(force: true);
+    }
+
+    private static EditModel FromSaved(Collection c) => new()
+    {
+        Id = c.Id, Name = c.Name, Include = [.. c.IncludeTags], Exclude = [.. c.ExcludeTags],
+        Description = c.Description, DescriptionOrigin = c.DescriptionOrigin,
+    };
+
+    private async Task LoadListsAsync()
+    {
+        _collections = await Stats.CollectionsAsync();
+        _tags = await Stats.TagsAsync();
+    }
+
+    /// <summary>Loads the member page for the edited rule; reloads only when the rule or page changed, unless forced.</summary>
+    private async Task LoadMembersAsync(bool force = false)
+    {
+        if (_edit is null || _edit.Include.Count == 0)
+        {
+            _members = _edit is null ? null : new SearchPage([], 0);
+            _byType = [];
+            _membersKey = "";
+            _rulePending = false;
+            return;
+        }
+        var query = RuleQuery;
+        var key = $"{string.Join(",", query.IncludeTags)}|{string.Join(",", query.ExcludeTags)}|{_page}";
+        if (!force && key == _membersKey) return;
+        _membersKey = key;
+        _members = await Search.SearchAsync(query, (_page - 1) * PageSize, PageSize);
+        _rulePending = _saved is not null && !(_saved.IncludeTags.SequenceEqual(_edit.Include) && _saved.ExcludeTags.SequenceEqual(_edit.Exclude));
+        _byType = _saved is not null && !_rulePending && _collections?.FirstOrDefault(c => c.Id == _saved.Id) is { } counted
+            ? counted.ByType
+            : await TypeBreakdownAsync(query);
+    }
+
+    private async Task<IReadOnlyList<StatCount>> TypeBreakdownAsync(SearchQuery query)
+    {
+        var result = new List<StatCount>();
+        foreach (var type in Enum.GetValues<AssetType>())
+        {
+            var q = query with { Types = [type] };
+            var n = await Search.CountAsync(q);
+            if (n > 0) result.Add(new StatCount(type.ToString(), n, q));
+        }
+        return result.OrderByDescending(s => s.Count).ToList();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Rule chips change the edited rule in place; refresh the member preview when it differs from what is shown.
+        if (_edit is not null && _members is not null)
+        {
+            var before = _membersKey;
+            await LoadMembersAsync();
+            if (_membersKey != before) StateHasChanged();
+        }
+    }
+
+    private async Task PageAsync(int page)
+    {
+        _page = page;
+        await LoadMembersAsync();
+    }
+
+    private void AddRuleTag(string? tag, bool include)
+    {
+        if (_edit is null || string.IsNullOrWhiteSpace(tag)) return;
+        tag = TagService.Normalize(tag);
+        var target = include ? _edit.Include : _edit.Exclude;
+        var other = include ? _edit.Exclude : _edit.Include;
+        other.Remove(tag);
+        if (!target.Contains(tag)) target.Add(tag);
+        _page = 1;
+    }
+
+    private Task<IEnumerable<string>> FindTagsAsync(string? text, CancellationToken ct)
+    {
+        var names = (_tags ?? []).Select(t => t.Name);
+        IEnumerable<string> found = string.IsNullOrWhiteSpace(text) ? names : names.Where(t => t.Contains(text.Trim(), StringComparison.OrdinalIgnoreCase));
+        found = found.Take(30).ToList();
+        // Typed text that is not an existing tag can still be used (it matches nothing until assets carry it).
+        if (!string.IsNullOrWhiteSpace(text) && !found.Contains(TagService.Normalize(text))) found = found.Append(text.Trim());
+        return Task.FromResult(found);
+    }
+
+    private async Task SaveAsync()
+    {
+        var e = _edit!;
+        var collection = new Collection
+        {
+            Id = e.Id, Name = e.Name.Trim(), IncludeTags = [.. e.Include], ExcludeTags = [.. e.Exclude],
+            Description = string.IsNullOrWhiteSpace(e.Description) ? null : e.Description.Trim(),
+            // A description the user changed becomes theirs; an untouched AI description keeps its origin.
+            DescriptionOrigin = _saved is not null && e.Description == _saved.Description ? _saved.DescriptionOrigin : TextOrigin.User,
+            CreatedAt = _saved?.CreatedAt ?? default,
+        };
+        var saved = await Ui.RunAsync(() => CollectionData.SaveAsync(collection), "Collection saved.");
+        if (saved is null) return;
+        _loadedKey = null;
+        if (saved.Id == Id)
+        {
+            await LoadListsAsync();
+            await OnParametersSetAsync();
+        }
+        else Nav.NavigateTo(Href(saved.Id));
+    }
+
+    private async Task DeleteAsync()
+    {
+        var name = _edit!.Name;
+        var ok = await Dialogs.ShowMessageBoxAsync("Delete collection",
+            $"Delete the collection \"{name}\"? Its assets and their tags stay in the catalog.", yesText: "Delete", cancelText: "Cancel");
+        if (ok != true) return;
+        if (await Ui.RunAsync(() => CollectionData.DeleteAsync(_edit.Id), $"Deleted \"{name}\"."))
+            Nav.NavigateTo("collections");
+    }
+
+    private async Task DescribeAsync()
+    {
+        var e = _edit!;
+        _describeJob = await Ui.RunAsync(() => Jobs.EnqueueAsync(JobTypes.DescribeCollection, $"Describe collection {e.Name}", new CollectionPayload(e.Id)));
+    }
+
+    private void NewFromTag(string tag) => Nav.NavigateTo(NewHref(tag));
+
+    private void OnJobFinished(JobSnapshot job)
+    {
+        if (job.Id != _describeJob) return;
+        InvokeAsync(() =>
+        {
+            _describeJob = null;
+            StateHasChanged();
+        });
+    }
+
+    private void OnCatalogChanged() => InvokeAsync(async () =>
+    {
+        await LoadListsAsync();
+        if (Id is { } id && await CollectionData.GetAsync(id) is { } fresh)
+        {
+            // Take a new AI description unless the user is editing the text.
+            if (_edit is not null && _saved is not null && _edit.Description == _saved.Description)
+            {
+                _edit.Description = fresh.Description;
+                _edit.DescriptionOrigin = fresh.DescriptionOrigin;
+            }
+            _saved = fresh;
+        }
+        _previewVersion++;
+        await LoadMembersAsync(force: true);
+        StateHasChanged();
+    });
+
+    private static string TypeSummary(IReadOnlyList<StatCount> byType) =>
+        byType.Count == 0 ? "Empty" : string.Join(" · ", byType.Where(t => t.Count > 0).OrderByDescending(t => t.Count).Take(4).Select(t => $"{t.Count:N0} {t.Label}"));
+
+    private static string Capitalize(string s) => s.Length == 0 ? s : char.ToUpperInvariant(s[0]) + s[1..];
+
+    private static string Href(long id) => $"collections/{id}";
+
+    private static string NewHref(string? tag = null) => "collections?tab=new" + (tag is null ? "" : "&tag=" + Uri.EscapeDataString(tag));
+
+    private static string BrowseHref(SearchQuery q) => "browse?q=" + q.ToToken();
+
+    public void Dispose()
+    {
+        Catalog.ContentChanged -= OnCatalogChanged;
+        Hub.Finished -= OnJobFinished;
+    }
+}

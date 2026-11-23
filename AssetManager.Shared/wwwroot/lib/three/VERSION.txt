@@ -1,0 +1,3 @@
+three.js r186 (npm three@0.186.1, sha256 of tarball 8cd068708ea44f2c73c944b1cead2ba2f0d5c15c8fc194e5700f4e4f4a033fe7).
+build/three.module.js, build/three.core.js and examples/jsm addons (GLTFLoader, BufferGeometryUtils, SkeletonUtils, OrbitControls)
+with the bare "three" import rewritten to the relative module path. License: MIT (LICENSE).

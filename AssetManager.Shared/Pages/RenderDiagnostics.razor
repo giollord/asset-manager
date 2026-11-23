@@ -1,0 +1,103 @@
+@page "/diagnostics/render"
+@using AssetManager.Core.Domain
+@using AssetManager.Processing.Handlers
+@using AssetManager.Processing.Settings
+@using ImageMagick
+@inject AssetProcessor Processor
+@inject PreviewSettings PreviewSettings
+
+<PageTitle>Render diagnostics</PageTitle>
+
+@* Developer check of the WebView model renderer (not linked from the navigation). *@
+<MudText Typo="Typo.h5" Class="mb-4">Render diagnostics</MudText>
+<MudStack Row="true" AlignItems="AlignItems.End" Class="mb-4">
+    <MudTextField @bind-Value="_path" Label="Model file" Variant="Variant.Outlined" InputId="model-path" Immediate="true" Style="min-width: 40rem" />
+    <MudButton id="render" Variant="Variant.Filled" Color="Color.Primary" OnClick="RenderAsync" Disabled="_busy">Render</MudButton>
+</MudStack>
+
+@if (_status is not null)
+{
+    <MudText id="status" Class="mb-4" Style="white-space: pre-line">@_status</MudText>
+}
+
+@if (_views.Count > 0)
+{
+    <div id="views" style="display:grid; grid-template-columns: repeat(@_columns, 1fr); gap: 4px; max-width: 1200px">
+        @foreach (var v in _views)
+        {
+            <img src="@v" class="preview-surface" style="width: 100%" alt="view" />
+        }
+    </div>
+}
+@if (_probe is not null)
+{
+    <MudText Typo="Typo.h6" Class="mt-4">Orientation probe</MudText>
+    <img id="probe" src="@_probe" class="preview-surface" style="max-width: 768px" alt="probe" />
+}
+
+
+@code {
+    private string _path = "";
+    private string? _status;
+    private bool _busy;
+    private int _columns = 8;
+    private List<string> _views = [];
+    private string? _probe;
+
+    private async Task RenderAsync()
+    {
+        _busy = true;
+        _views = [];
+        _probe = null;
+        _status = "Rendering...";
+        try
+        {
+            var options = await PreviewSettings.GetAsync();
+            _columns = options.AzimuthsPerRing;
+            var path = _path.Trim().Trim('"');
+            var item = new HandlerItem
+            {
+                Asset = new Asset
+                {
+                    Name = Path.GetFileNameWithoutExtension(path),
+                    Type = AssetType.Model3D,
+                    Files = [new AssetFile { Role = FileRole.Primary, FileName = Path.GetFileName(path), Extension = Path.GetExtension(path) }],
+                },
+                PrimaryPath = path,
+            };
+            var started = DateTime.UtcNow;
+            var result = await Processor.ProcessAsync(item, options);
+            var views = result.Previews.Where(p => p.Kind == PreviewKind.ModelView).OrderBy(p => p.Index).ToList();
+            _views = views.Select(v => $"data:{v.Mime};base64,{Convert.ToBase64String(v.Bytes)}").ToList();
+            var probe = result.Previews.FirstOrDefault(p => p.Kind == PreviewKind.OrientationProbe);
+            _probe = probe is null ? null : $"data:{probe.Mime};base64,{Convert.ToBase64String(probe.Bytes)}";
+
+            var transparent = views.Count > 0 && views.All(v =>
+            {
+                using var img = new MagickImage(v.Bytes);
+                using var pixels = img.GetPixels();
+                return img.HasAlpha && pixels.GetPixel(0, 0).ToColor()!.A == 0;
+            });
+            var m = item.Asset.Model;
+            _status = string.Join("\n",
+                $"views: {views.Count} ({views.FirstOrDefault()?.Width}x{views.FirstOrDefault()?.Height} {views.FirstOrDefault()?.Mime})",
+                $"transparent: {(transparent ? "yes" : "no")}",
+                $"thumbnail: {(result.Previews.Any(p => p.Kind == PreviewKind.Thumbnail) ? "yes" : "no")}",
+                $"probe: {(probe is null ? "none" : $"{probe.Width}x{probe.Height}")}",
+                $"time: {(DateTime.UtcNow - started).TotalSeconds:0.0} s",
+                $"stats: {m?.Vertices} vertices, {m?.Triangles} triangles, {m?.Meshes} meshes, {m?.Materials} materials, {m?.Bones} bones",
+                $"size: {string.Join(" x ", m?.Transform.SizeMeters ?? [])} m, anomaly {m?.Transform.Anomaly}, up {m?.Transform.SourceUpAxis ?? "unknown"}",
+                $"orientation: {m?.Orientation.Describe()}, probe ranking {string.Join(",", m?.ProbeRanking ?? [])}",
+                $"textures missing: {string.Join(", ", m?.MissingTextures ?? [])}",
+                $"error: {result.Error ?? "none"}");
+        }
+        catch (Exception e)
+        {
+            _status = "error: " + e.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

@@ -1,0 +1,178 @@
+@using AssetManager.AI.Runtime
+@using AssetManager.Core.Platform
+@implements IDisposable
+@inject AiRuntime Runtime
+@inject ModelInstalls Installs
+@inject IAppSettingsStore Settings
+@inject IFilePicker FilePicker
+@inject Services.UiActions Ui
+
+<MudPaper Class="pa-4" Outlined="true">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-3">
+        <MudText Typo="Typo.h6">AI model</MudText>
+        <MudSpacer />
+        <MudChip T="string" id="ai-status" Color="StatusColor" Variant="Variant.Text" Icon="@StatusIcon">@Runtime.StatusText</MudChip>
+        <MudTooltip Text="Restart the AI servers">
+            <MudIconButton Icon="@Icons.Material.Filled.RestartAlt" Size="Size.Small" OnClick="RestartAsync" aria-label="Restart AI" />
+        </MudTooltip>
+    </MudStack>
+
+    @foreach (var f in Fields)
+    {
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-2">
+            <MudTextField T="string" Value="f.Value" Label="@f.Label" ReadOnly="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                          HelperText="@f.Helper" Placeholder="Not set" InputId="@f.Id" Class="flex-grow-1" />
+            <MudButton Variant="Variant.Outlined" Size="Size.Small" OnClick="() => PickAsync(f.Role)">Pick file...</MudButton>
+            <MudIconButton Icon="@Icons.Material.Filled.Clear" Size="Size.Small" Disabled="f.Value is null" OnClick="() => Clear(f.Role)" aria-label="@($"Clear {f.Label}")" />
+        </MudStack>
+    }
+
+    <MudRadioGroup T="AiAcceleration" Value="Settings.Current.Acceleration" ValueChanged="SetAcceleration" Class="mb-2">
+        <MudText Typo="Typo.subtitle2" Class="mr-3 d-inline">Acceleration</MudText>
+        <MudRadio T="AiAcceleration" Value="AiAcceleration.Auto">Auto (GPU, else CPU)</MudRadio>
+        <MudRadio T="AiAcceleration" Value="AiAcceleration.Gpu">GPU (Vulkan)</MudRadio>
+        <MudRadio T="AiAcceleration" Value="AiAcceleration.Cpu">CPU</MudRadio>
+    </MudRadioGroup>
+
+    <MudSelect T="int" Value="Settings.Current.AiParallelRequests" ValueChanged="SetParallel" Label="Requests at once" Dense="true" Margin="Margin.Dense"
+               Disabled="Settings.Current.Acceleration == AiAcceleration.Cpu" Style="max-width: 420px" Class="mb-2" id="ai-parallel"
+               HelperText="@ParallelHelp">
+        @for (var n = 1; n <= 4; n++)
+        {
+            var value = n;
+            <MudSelectItem T="int" Value="value">@value</MudSelectItem>
+        }
+    </MudSelect>
+
+    <MudText Typo="Typo.subtitle1" Class="mt-4 mb-2">Recommended models</MudText>
+    <MudText Typo="Typo.body2" Class="mb-3">
+        Downloads start only when you click them and go to @Installs.Downloader.Folder. Without a model, assets are cataloged and searchable but not AI-enriched.
+    </MudText>
+    @foreach (var p in ModelCatalog.All)
+    {
+        var installed = Installs.Downloader.IsInstalled(p);
+        var running = Installs.IsRunning(p);
+        var progress = Installs.Progress(p);
+        var error = Installs.Error(p);
+        <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-2" id="@($"pkg-{p.Id}")">
+            <div class="flex-grow-1">
+                <MudText Typo="Typo.body1">@p.Title <MudText Typo="Typo.caption" Inline="true">(@Gb(p.TotalSize))</MudText></MudText>
+                <MudText Typo="Typo.caption">@p.Description</MudText>
+                @if (running)
+                {
+                    <MudProgressLinear Color="Color.Primary" Value="(progress?.Fraction ?? 0) * 100" Class="mt-1" />
+                    <MudText Typo="Typo.caption">@(progress is null ? "Starting..." : $"{progress.File}: {Gb(progress.Done)} of {Gb(progress.Total)} ({progress.Fraction:P0})")</MudText>
+                }
+                @if (error is not null)
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Error">@error</MudText>
+                }
+            </div>
+            @if (installed && !running)
+            {
+                <MudChip T="string" Color="Color.Success" Variant="Variant.Text" Icon="@Icons.Material.Filled.CheckCircle">Installed</MudChip>
+                <MudButton Size="Size.Small" OnClick="() => Use(p)">Use</MudButton>
+            }
+            else if (running)
+            {
+                <MudButton Size="Size.Small" Color="Color.Warning" OnClick="() => Installs.Cancel(p)">Cancel</MudButton>
+            }
+            else
+            {
+                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Download"
+                           OnClick="() => Installs.Start(p)">Download</MudButton>
+            }
+        </MudStack>
+    }
+</MudPaper>
+
+@code {
+    private sealed record Field(ModelRole Role, string Id, string Label, string? Value, string Helper);
+
+    private IEnumerable<Field> Fields =>
+    [
+        new(ModelRole.Chat, "chat-model", "Chat model (GGUF)", Settings.Current.ChatModelPath, "For example gemma-4-E4B-it-Q4_K_M.gguf"),
+        new(ModelRole.Mmproj, "mmproj-model", "Vision projector (mmproj GGUF)", Settings.Current.MmprojPath, "Lets the model see previews"),
+        new(ModelRole.Embedding, "embedding-model", "Embedding model (GGUF)", Settings.Current.EmbeddingModelPath, "For semantic search, e.g. embeddinggemma-300M"),
+    ];
+
+    private Color StatusColor => Runtime.Status switch
+    {
+        AiRuntimeStatus.Ready => Color.Success,
+        AiRuntimeStatus.Starting => Color.Info,
+        AiRuntimeStatus.Failed => Color.Error,
+        _ => Color.Default,
+    };
+
+    private string StatusIcon => Runtime.Status switch
+    {
+        AiRuntimeStatus.Ready => Icons.Material.Filled.CheckCircle,
+        AiRuntimeStatus.Starting => Icons.Material.Filled.HourglassTop,
+        AiRuntimeStatus.Failed => Icons.Material.Filled.Error,
+        _ => Icons.Material.Filled.CloudOff,
+    };
+
+    protected override void OnInitialized()
+    {
+        Runtime.Changed += Refresh;
+        Installs.Changed += Refresh;
+    }
+
+    private void Refresh() => _ = InvokeAsync(StateHasChanged);
+
+    private async Task PickAsync(ModelRole role)
+    {
+        var picked = await Ui.RunAsync(() => FilePicker.PickFilesAsync(false));
+        if (picked is not { Count: > 0 }) return;
+        Set(role, picked[0]);
+    }
+
+    private void Clear(ModelRole role) => Set(role, null);
+
+    private void Set(ModelRole role, string? path) => Settings.Update(s =>
+    {
+        switch (role)
+        {
+            case ModelRole.Chat: s.ChatModelPath = path; break;
+            case ModelRole.Mmproj: s.MmprojPath = path; break;
+            case ModelRole.Embedding: s.EmbeddingModelPath = path; break;
+        }
+    });
+
+    private void Use(ModelPackage p) => Settings.Update(s =>
+    {
+        foreach (var f in p.Files)
+        {
+            var path = Installs.Downloader.PathOf(f);
+            switch (f.Role)
+            {
+                case ModelRole.Chat: s.ChatModelPath = path; break;
+                case ModelRole.Mmproj: s.MmprojPath = path; break;
+                case ModelRole.Embedding: s.EmbeddingModelPath = path; break;
+            }
+        }
+    });
+
+    private void SetAcceleration(AiAcceleration value) => Settings.Update(s => s.Acceleration = value);
+
+    private void SetParallel(int value) => Settings.Update(s => s.AiParallelRequests = value);
+
+    private string ParallelHelp => Runtime.IsReady && Runtime.Chat.Parallel != AiRuntime.ParallelOf(Settings.Current)
+        ? $"Running with {Runtime.Chat.Parallel}: the GPU did not start with {AiRuntime.ParallelOf(Settings.Current)} (not enough memory?)."
+        : "More requests at once use the GPU better and finish imports faster, at the cost of more GPU memory. On the CPU it is always 1.";
+
+    private Task RestartAsync() => Ui.RunAsync(async () =>
+    {
+        await Runtime.Chat.StopAsync();
+        await Runtime.Embedding.StopAsync();
+        await Runtime.StartAsync();
+    });
+
+    private static string Gb(long bytes) => bytes >= 1L << 30 ? $"{bytes / (double)(1L << 30):0.0} GB" : $"{bytes / (double)(1L << 20):0} MB";
+
+    public void Dispose()
+    {
+        Runtime.Changed -= Refresh;
+        Installs.Changed -= Refresh;
+    }
+}

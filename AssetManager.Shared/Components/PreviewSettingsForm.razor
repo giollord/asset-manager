@@ -1,0 +1,170 @@
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
+@using System.Reflection
+@using AssetManager.Processing.Settings
+@inject PreviewSettings Previews
+@inject UiActions Ui
+@inject ISnackbar Snackbar
+
+@*
+    Every PreviewOptions field (spec "Preview settings"), generated from the record's [Display] and [Range] attributes,
+    with its default, validation and reset. Values are stored in the catalog and apply to new previews only.
+*@
+<MudPaper Class="pa-4" Outlined="true" id="preview-settings">
+    <MudText Typo="Typo.h6">Previews</MudText>
+    <MudAlert Severity="Severity.Info" Dense="true" Class="my-2">
+        These apply to new previews. Existing previews change only when they are regenerated ("Regenerate outdated previews" below).
+    </MudAlert>
+    <MudForm @ref="_form" @bind-IsValid="_valid">
+        <MudGrid Spacing="2">
+            @foreach (var field in Fields)
+            {
+                var f = field;
+                <MudItem xs="12" sm="6" md="4">
+                    @if (f.Property.PropertyType == typeof(bool))
+                    {
+                        <MudSwitch T="bool" Value="(bool)_values[f.Name]!" ValueChanged="v => Set(f, v)" Label="@f.Label" Color="Color.Primary" data-field="@f.Name" />
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary" HtmlTag="div">Default: @(((bool)f.Default!) ? "on" : "off")</MudText>
+                    }
+                    else
+                    {
+                        <MudTextField T="string" Value="@(_invalidText.GetValueOrDefault(f.Name) ?? Text(_values[f.Name]))" ValueChanged="v => SetText(f, v)" Label="@f.Label" Margin="Margin.Dense"
+                                      Validation="@(new Func<string, string?>(v => Check(f, v)))" Immediate="true"
+                                      HelperText="@($"Default: {Text(f.Default)}{(f.Range is { } r ? $" · {Text(r.Minimum)}–{Text(r.Maximum)}" : "")}")"
+                                      data-field="@f.Name" Class="@($"preview-field field-{f.Name}")" />
+                    }
+                </MudItem>
+            }
+        </MudGrid>
+    </MudForm>
+    @foreach (var e in _errors)
+    {
+        <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2 preview-error">@e</MudAlert>
+    }
+    <MudStack Row="true" Spacing="2" Class="mt-3">
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveAsync" Disabled="!_valid || _invalidText.Count > 0 || !Changed" id="preview-save">Save</MudButton>
+        <MudButton Variant="Variant.Text" OnClick="() => Show(_saved)" Disabled="!Changed">Undo changes</MudButton>
+        <MudButton Variant="Variant.Text" OnClick="ResetAsync" id="preview-reset">Reset to defaults</MudButton>
+    </MudStack>
+</MudPaper>
+
+@code {
+    public sealed record Field(PropertyInfo Property, string Name, string Label, object? Default, RangeAttribute? Range);
+
+    private static readonly PreviewOptions Defaults = new();
+
+    /// <summary>Every public settable property of <see cref="PreviewOptions"/>, in declaration order.</summary>
+    public static readonly IReadOnlyList<Field> Fields = typeof(PreviewOptions).GetProperties(BindingFlags.Public | BindingFlags.Instance)
+        .Where(p => p.CanWrite)
+        .OrderBy(p => p.MetadataToken)
+        .Select(p => new Field(p, p.Name, p.GetCustomAttribute<DisplayAttribute>()?.Name ?? p.Name, p.GetValue(Defaults), p.GetCustomAttribute<RangeAttribute>()))
+        .ToList();
+
+    private MudForm? _form;
+    private bool _valid = true;
+    private PreviewOptions _saved = new();
+    private readonly Dictionary<string, object?> _values = [];
+    private readonly Dictionary<string, string> _invalidText = [];
+    private IReadOnlyList<string> _errors = [];
+
+    private bool Changed => _invalidText.Count > 0 || Build().Version() != _saved.Version();
+
+    protected override async Task OnInitializedAsync() => Show(await Previews.GetAsync());
+
+    private void Show(PreviewOptions options)
+    {
+        _saved = options;
+        _invalidText.Clear();
+        foreach (var f in Fields) _values[f.Name] = f.Property.GetValue(options);
+        _errors = [];
+    }
+
+    private static string Text(object? value) => value switch
+    {
+        IEnumerable<int> list => string.Join(", ", list),
+        double d => d.ToString("0.###", CultureInfo.InvariantCulture),
+        null => "",
+        _ => Convert.ToString(value, CultureInfo.InvariantCulture) ?? "",
+    };
+
+    /// <summary>Parses a field's text; null when it is not a valid value of the field's type.</summary>
+    private static object? Parse(Field f, string? text)
+    {
+        text = text?.Trim() ?? "";
+        var type = f.Property.PropertyType;
+        if (type == typeof(int)) return int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var i) ? i : null;
+        if (type == typeof(double))
+            return double.TryParse(text.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out var d) ? d : null;
+        if (type == typeof(IReadOnlyList<int>))
+        {
+            var parts = text.Split([',', ' ', ';'], StringSplitOptions.RemoveEmptyEntries);
+            var list = new List<int>();
+            foreach (var p in parts)
+            {
+                if (!int.TryParse(p, NumberStyles.Integer, CultureInfo.InvariantCulture, out var n)) return null;
+                list.Add(n);
+            }
+            return list.Count == 0 ? null : list;
+        }
+        return null;
+    }
+
+    private string? Check(Field f, string? text)
+    {
+        var value = Parse(f, text);
+        if (value is null) return f.Property.PropertyType == typeof(IReadOnlyList<int>) ? "Enter whole numbers separated by commas." : "Enter a number.";
+        if (f.Range is { } r && !r.IsValid(value)) return $"Must be between {Text(r.Minimum)} and {Text(r.Maximum)}.";
+        return null;
+    }
+
+    private void SetText(Field f, string? text)
+    {
+        if (Parse(f, text) is { } value && Check(f, text) is null)
+        {
+            _values[f.Name] = value;
+            _invalidText.Remove(f.Name);
+        }
+        else _invalidText[f.Name] = text ?? "";
+        _errors = [];
+    }
+
+    private void Set(Field f, object value)
+    {
+        _values[f.Name] = value;
+        _errors = [];
+    }
+
+    /// <summary>The options as edited (fields with invalid text keep their last valid value).</summary>
+    private PreviewOptions Build()
+    {
+        var options = _saved with { };
+        foreach (var f in Fields) f.Property.SetValue(options, _values[f.Name]);
+        return options;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_form is not null) await _form.Validate();
+        if (!_valid || _invalidText.Count > 0) return;
+        var options = Build();
+        // Rules across fields (primary view inside the rings, thresholds in order) are checked by the record itself.
+        _errors = options.Errors();
+        if (_errors.Count > 0) return;
+        try
+        {
+            await Previews.SaveAsync(options);
+            Show(options);
+            Snackbar.Add("Preview settings saved. They apply to new previews.", Severity.Success);
+        }
+        catch (ValidationException e)
+        {
+            _errors = [e.Message];
+        }
+    }
+
+    private async Task ResetAsync()
+    {
+        await Previews.ResetAsync();
+        Show(await Previews.GetAsync());
+    }
+}

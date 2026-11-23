@@ -1,0 +1,151 @@
+@page "/"
+@using AssetManager.Core.Search
+@using AssetManager.Data.Search
+@implements IDisposable
+@inject ICatalogStatsService Stats
+@inject AssetManager.Data.CatalogStore Catalog
+@inject NavigationManager Nav
+
+<PageTitle>Dashboard</PageTitle>
+
+<MudText Typo="Typo.h4" GutterBottom="true">Dashboard</MudText>
+
+@if (_error is not null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-3">@_error</MudAlert>
+}
+@if (_stats is null)
+{
+    <MudProgressLinear Indeterminate="true" />
+}
+else
+{
+    <MudGrid Spacing="3">
+        @StatCard("Assets", _stats.Assets.ToString("N0"), Icons.Material.Filled.PermMedia, "stat-assets", new SearchQuery())
+        @StatCard("Sources", _stats.Sources.ToString("N0"), Icons.Material.Filled.Inventory2, "stat-sources", null, "sources")
+        @StatCard("Collections", _stats.Collections.ToString("N0"), Icons.Material.Filled.CollectionsBookmark, "stat-collections", null, "collections")
+        @StatCard("Tags", _stats.Tags.ToString("N0"), Icons.Material.Filled.Sell, "stat-tags", null, "collections?tab=tags")
+        <MudItem xs="12" sm="6" md="4" lg="4">
+            <MudPaper Outlined="true" Class="pa-4" Style="height: 100%" id="stat-size">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                    <MudIcon Icon="@Icons.Material.Filled.Storage" Color="Color.Primary" />
+                    <MudText Typo="Typo.subtitle2" Class="mud-text-secondary">Catalog size</MudText>
+                </MudStack>
+                <MudText Typo="Typo.h5" Class="mt-1">@Bytes(_stats.Size.Total)</MudText>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                    Previews @Bytes(_stats.Size.Previews) · Stored originals @Bytes(_stats.Size.StoredOriginals) · Other @Bytes(_stats.Size.Other)
+                </MudText>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    <MudGrid Spacing="3" Class="mt-1">
+        <MudItem xs="12" md="6" lg="4">
+            <MudPaper Outlined="true" Class="pa-4" Style="height: 100%" id="by-type">
+                <MudText Typo="Typo.h6">By type</MudText>
+                @if (_stats.Assets == 0)
+                {
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary mt-2">The catalog is empty. <MudLink Href="import">Import assets</MudLink> to get started.</MudText>
+                }
+                else
+                {
+                    <MudChart T="double" ChartType="ChartType.Donut" ChartSeries="_typeSeries" ChartLabels="_typeLabels" Width="220px" Height="220px"
+                              LegendPosition="Position.Bottom" />
+                    @Breakdown(_stats.ByType)
+                }
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" md="6" lg="4">
+            @BreakdownCard("AI enrichment", _stats.Enrichment, "enrichment")
+            <div class="mt-3">@BreakdownCard("Availability", _stats.Availability, "availability")</div>
+        </MudItem>
+        <MudItem xs="12" md="6" lg="4">
+            @BreakdownCard("License", _stats.License, "license")
+            <div class="mt-3">@BreakdownCard("Model issues", _stats.ModelIssues, "model-issues")</div>
+        </MudItem>
+    </MudGrid>
+}
+
+@code {
+    private CatalogStats? _stats;
+    private string? _error;
+    private List<ChartSeries<double>> _typeSeries = [];
+    private string[] _typeLabels = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Catalog.ContentChanged += OnCatalogChanged;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            _stats = await Stats.GetAsync();
+            _typeLabels = _stats.ByType.Select(t => t.Label).ToArray();
+            _typeSeries = [new ChartSeries<double> { Name = "Assets", Data = _stats.ByType.Select(t => (double)t.Count).ToArray() }];
+            _error = null;
+        }
+        catch (Exception e) when (e is InvalidOperationException or Microsoft.Data.Sqlite.SqliteException)
+        {
+            _error = $"Could not read the catalog: {e.Message}";
+        }
+    }
+
+    private void OnCatalogChanged() => InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    /// <summary>Opens Browse filtered to exactly the assets a count stands for.</summary>
+    public void Open(SearchQuery query) => Nav.NavigateTo("browse?q=" + query.ToToken());
+
+    private RenderFragment StatCard(string label, string value, string icon, string id, SearchQuery? query, string? href = null) => __builder =>
+    {
+        <MudItem xs="12" sm="6" md="4" lg="2">
+            <MudPaper Outlined="true" Class="pa-4 stat-card" Style="height: 100%; cursor: pointer" id="@id"
+                      @onclick="() => { if (query is not null) Open(query); else Nav.NavigateTo(href!); }">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                    <MudIcon Icon="@icon" Color="Color.Primary" />
+                    <MudText Typo="Typo.subtitle2" Class="mud-text-secondary">@label</MudText>
+                </MudStack>
+                <MudText Typo="Typo.h5" Class="mt-1">@value</MudText>
+            </MudPaper>
+        </MudItem>
+    };
+
+    private RenderFragment BreakdownCard(string title, IReadOnlyList<StatCount> counts, string id) => __builder =>
+    {
+        <MudPaper Outlined="true" Class="pa-4" id="@id">
+            <MudText Typo="Typo.h6">@title</MudText>
+            @Breakdown(counts)
+        </MudPaper>
+    };
+
+    private RenderFragment Breakdown(IReadOnlyList<StatCount> counts) => __builder =>
+    {
+        <MudList T="string" Dense="true" Class="mt-1">
+            @foreach (var count in counts)
+            {
+                <MudListItem T="string" OnClick="() => Open(count.Query)" Class="stat-link" data-label="@count.Label" Disabled="count.Count == 0">
+                    <MudStack Row="true" Justify="Justify.SpaceBetween">
+                        <MudText Typo="Typo.body2">@count.Label</MudText>
+                        <MudText Typo="Typo.body2" Class="stat-count"><b>@count.Count.ToString("N0")</b></MudText>
+                    </MudStack>
+                </MudListItem>
+            }
+        </MudList>
+    };
+
+    public static string Bytes(long bytes) => bytes switch
+    {
+        >= 1L << 30 => $"{bytes / (double)(1L << 30):F1} GB",
+        >= 1L << 20 => $"{bytes / (double)(1L << 20):F1} MB",
+        >= 1L << 10 => $"{bytes / 1024.0:F0} KB",
+        _ => $"{bytes} B",
+    };
+
+    public void Dispose() => Catalog.ContentChanged -= OnCatalogChanged;
+}

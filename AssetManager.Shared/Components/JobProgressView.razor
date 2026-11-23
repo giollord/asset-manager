@@ -1,0 +1,109 @@
+@using AssetManager.Core.Domain
+@using AssetManager.Core.Jobs
+@inject IJobQueue Queue
+@inject Services.UiActions Ui
+
+@* One job's progress, used in the app-bar quick view, the Jobs page and the import wizard (design D8). *@
+<div class="job-progress" id="@($"job-{Job.Id}")">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+        <MudText Typo="@(Compact ? Typo.body2 : Typo.subtitle1)" Class="flex-grow-1" Style="min-width: 0">
+            <b>@Job.Title</b>
+        </MudText>
+        <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="StateColor" Class="job-state">@StateText</MudChip>
+        @if (Job.IsActive && !Compact)
+        {
+            <MudTooltip Text="Cancel">
+                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="CancelAsync" aria-label="Cancel job" />
+            </MudTooltip>
+        }
+        @if (!Job.IsActive && Job.Errors > 0 && !Compact)
+        {
+            <MudButton Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Replay" OnClick="RetryAsync" Class="retry-failed">Retry failed</MudButton>
+        }
+    </MudStack>
+
+    @if (Job.State == JobState.Running || (Job.Stage is not null && !Compact))
+    {
+        <MudProgressLinear Color="@(Job.State == JobState.Failed ? Color.Error : Color.Primary)" Rounded="true" Size="Size.Small" Class="my-1"
+                           Value="@((Job.Fraction ?? 0) * 100)" Indeterminate="@(Job.State == JobState.Running && Job.Fraction is null)" />
+        <MudText Typo="Typo.caption" Class="job-stage">
+            @if (Job.StageCount > 1) { <span>Stage @(Job.StageIndex + 1)/@Job.StageCount: </span> }
+            @Job.Stage
+            @if (Job.Total > 0) { <span> · @Job.Done.ToString("N0") / @Job.Total.ToString("N0") (@((Job.StageFraction ?? 0).ToString("P0")))</span> }
+        </MudText>
+        @if (!Compact && Job.State == JobState.Running && !string.IsNullOrEmpty(Job.CurrentItem))
+        {
+            <MudText Typo="Typo.caption" Class="d-block job-item" Style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">@Job.CurrentItem</MudText>
+        }
+    }
+
+    <MudText Typo="Typo.caption" Class="d-block job-times mud-text-secondary">
+        @if (Job.StartedAt is not null) { <span>Elapsed @Duration(Job.Elapsed(DateTime.UtcNow))</span> }
+        @if (Job.State == JobState.Running && Job.EtaSeconds is { } eta) { <span> · about @Duration(TimeSpan.FromSeconds(eta)) left</span> }
+        @if (Job.Warnings > 0) { <span> · @Job.Warnings warning@(Job.Warnings == 1 ? "" : "s")</span> }
+        @if (Job.Errors > 0) { <span class="mud-error-text"> · @Job.Errors error@(Job.Errors == 1 ? "" : "s")</span> }
+        @if (Summary is { Length: > 0 } s) { <span> · @s</span> }
+    </MudText>
+    @if (Job.Error is not null && !Compact)
+    {
+        <MudText Typo="Typo.caption" Color="Color.Error" Class="d-block">@Job.Error</MudText>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public JobSnapshot Job { get; set; } = null!;
+
+    /// <summary>One-line layout for the app-bar quick view.</summary>
+    [Parameter] public bool Compact { get; set; }
+
+    [Parameter] public EventCallback<long> Retried { get; set; }
+
+    private string StateText => Job.State switch
+    {
+        JobState.Pending => "Queued",
+        JobState.Running => Job.Fraction is { } f ? f.ToString("P0") : "Running",
+        JobState.Completed => Job.Errors > 0 ? "Done with errors" : "Done",
+        JobState.Failed => "Failed",
+        _ => "Cancelled",
+    };
+
+    private Color StateColor => Job.State switch
+    {
+        JobState.Running => Color.Primary,
+        JobState.Completed => Job.Errors > 0 ? Color.Warning : Color.Success,
+        JobState.Failed => Color.Error,
+        _ => Color.Default,
+    };
+
+    /// <summary>"3 updated, 1 added, 0 removed" from the summary JSON's numeric fields.</summary>
+    private string? Summary
+    {
+        get
+        {
+            if (Job.SummaryJson is null || Job.IsActive) return null;
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(Job.SummaryJson);
+                return string.Join(", ", doc.RootElement.EnumerateObject()
+                    .Where(p => p.Value.ValueKind == System.Text.Json.JsonValueKind.Number)
+                    .Select(p => $"{p.Value} {Humanize(p.Name)}"));
+            }
+            catch (System.Text.Json.JsonException) { return null; }
+        }
+    }
+
+    private static string Humanize(string name) =>
+        System.Text.RegularExpressions.Regex.Replace(name, "(?<=[a-z])([A-Z])", " $1").ToLowerInvariant();
+
+    public static string Duration(TimeSpan t) => t.TotalSeconds < 60 ? $"{Math.Max(0, (int)t.TotalSeconds)} s"
+        : t.TotalMinutes < 60 ? $"{(int)t.TotalMinutes} min {t.Seconds} s"
+        : t.TotalHours < 48 ? $"{(int)t.TotalHours} h {t.Minutes} min"
+        : $"{(int)t.TotalDays} days";
+
+    private Task CancelAsync() => Ui.RunAsync(() => Queue.CancelAsync(Job.Id));
+
+    private Task RetryAsync() => Ui.RunAsync(async () =>
+    {
+        if (await Queue.RetryFailedAsync(Job.Id) is { } id) await Retried.InvokeAsync(id);
+    });
+}

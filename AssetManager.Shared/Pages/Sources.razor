@@ -1,0 +1,329 @@
+@page "/sources"
+@page "/sources/{Id:long}"
+@using AssetManager.Core.Domain
+@using AssetManager.Core.Search
+@using AssetManager.Data.Search
+@using AssetManager.Data.Services
+@using AssetManager.Shared.Services
+@implements IDisposable
+@inject ICatalogStatsService Stats
+@inject SourceService SourceData
+@inject MetadataEditService Edits
+@inject DeletionService Deletion
+@inject AssetManager.Data.CatalogStore Catalog
+@inject AssetManager.Core.Platform.IShellService Shell
+@inject AssetManager.Core.Platform.IVolumeService Volumes
+@inject IDialogService Dialogs
+@inject UiActions Ui
+@inject NavigationManager Nav
+
+<PageTitle>Sources</PageTitle>
+
+<MudText Typo="Typo.h4" GutterBottom="true">Sources</MudText>
+
+<div style="display: flex; gap: 16px; align-items: flex-start">
+    <MudPaper Outlined="true" Class="pa-3" Style="width: 380px; flex-shrink: 0; max-height: calc(100vh - 140px); overflow-y: auto" id="source-list">
+        <MudTextField T="string" @bind-Value="_filter" Immediate="true" Placeholder="Filter sources" Adornment="Adornment.Start"
+                      AdornmentIcon="@Icons.Material.Filled.Search" Margin="Margin.Dense" Variant="Variant.Outlined" Class="mb-2" />
+        @if (_sources is null)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else if (_sources.Count == 0)
+        {
+            <MudText Typo="Typo.body2" Class="mud-text-secondary">No sources yet. <MudLink Href="import">Import assets</MudLink> to add one.</MudText>
+        }
+        else
+        {
+            <MudList T="long" Dense="true">
+                @foreach (var s in Visible)
+                {
+                    <MudListItem T="long" OnClick="() => Select(s.Id)" Class="@(s.Id == Id ? "source-row mud-selected-item" : "source-row")" data-id="@s.Id">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                            <MudIcon Icon="@KindIcon(s.Kind)" Size="Size.Small" Class="mud-text-secondary" />
+                            <MudText Typo="Typo.body2" Style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap" title="@s.Name">@s.Name</MudText>
+                            <MudChip T="string" Size="Size.Small" Class="source-count">@s.Count.ToString("N0")</MudChip>
+                        </MudStack>
+                    </MudListItem>
+                }
+            </MudList>
+        }
+    </MudPaper>
+
+    <div style="flex: 1; min-width: 0">
+        @if (Id is null)
+        {
+            <MudText Typo="Typo.body1" Class="mud-text-secondary mt-4">Select a source to see its details.</MudText>
+        }
+        else if (_d is null)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else
+        {
+            var s = _d.Source;
+            <MudPaper Outlined="true" Class="pa-4" id="source-details">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                    <MudIcon Icon="@KindIcon(s.Kind)" Color="Color.Primary" />
+                    <MudText Typo="Typo.h5" Style="flex: 1">@s.DisplayName</MudText>
+                    <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.GridView" OnClick="() => Nav.NavigateTo(BrowseHref(s.Id))" id="source-browse">
+                        Show @Total.ToString("N0") assets
+                    </MudButton>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete" OnClick="DeleteAsync" id="source-delete">Delete source</MudButton>
+                </MudStack>
+
+                @if (_d.Chain.Count > 1)
+                {
+                    <MudBreadcrumbs Items="ChainCrumbs" Class="px-0 py-1" />
+                }
+
+                <MudSimpleTable Dense="true" Elevation="0" Class="mt-2" Style="max-width: 900px">
+                    <tbody>
+                        <tr><td style="width: 160px">Kind</td><td>@KindLabel(s.Kind)</td></tr>
+                        <tr>
+                            <td>Location</td>
+                            <td style="word-break: break-all" id="source-location">
+                                @LocationText(s.Location)
+                                @if (s.Location.VolumeId is { } vol && Volumes.GetRoot(vol) is null)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">drive not attached</MudChip>
+                                }
+                            </td>
+                        </tr>
+                        <tr><td>Imported</td><td>@s.ImportedAt.ToLocalTime().ToString("g")</td></tr>
+                        <tr><td>Assets</td><td>@_d.OwnAssets.ToString("N0") directly@(Total != _d.OwnAssets ? $", {Total:N0} with nested sources" : "")</td></tr>
+                        @if (HasStoreInfo(s.Store))
+                        {
+                            <tr><td>Package</td><td id="source-package">@string.Join(" · ", new[] { s.Store.Title, s.Store.Publisher, s.Store.Version is null ? null : "v" + s.Store.Version }.Where(x => !string.IsNullOrWhiteSpace(x)))</td></tr>
+                            @if (s.Store.StoreId is not null)
+                            {
+                                <tr><td>Asset Store id</td><td>@s.Store.StoreId</td></tr>
+                            }
+                        }
+                        @if (s.Error is not null)
+                        {
+                            <tr><td>Error</td><td><MudText Typo="Typo.body2" Color="Color.Error">@s.Error</MudText></td></tr>
+                        }
+                    </tbody>
+                </MudSimpleTable>
+
+                @if (StoreUrl(s) is not null || s.Links.Count > 0)
+                {
+                    <MudText Typo="Typo.subtitle2" Class="mt-3">Links</MudText>
+                    @if (StoreUrl(s) is { } url)
+                    {
+                        <div><MudLink Typo="Typo.body2" OnClick="() => OpenLinkAsync(url)" id="source-store-link">Asset Store page</MudLink></div>
+                    }
+                    @foreach (var link in s.Links)
+                    {
+                        <div><MudLink Typo="Typo.body2" OnClick="() => OpenLinkAsync(link.Url)" title="@link.Url">@(link.Label ?? link.Url)</MudLink></div>
+                    }
+                }
+
+                @if (!string.IsNullOrWhiteSpace(s.Description))
+                {
+                    <MudText Typo="Typo.subtitle2" Class="mt-3">Description</MudText>
+                    <MudText Typo="Typo.body2" Style="white-space: pre-wrap">@s.Description</MudText>
+                }
+
+                <MudText Typo="Typo.subtitle2" Class="mt-3">License</MudText>
+                @if (_edit is null)
+                {
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                        <LicenseBadge License="s.License" />
+                        @if (s.UserEdited.HasFlag(EditedFields.License))
+                        {
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">edited</MudChip>
+                        }
+                    </MudStack>
+                    @if (!string.IsNullOrWhiteSpace(s.License.AttributionText))
+                    {
+                        <MudText Typo="Typo.body2" Class="mt-1" Style="white-space: pre-wrap">Attribution: @s.License.AttributionText</MudText>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(s.License.Evidence))
+                    {
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">From @s.License.Evidence</MudText>
+                    }
+
+                    <MudText Typo="Typo.subtitle2" Class="mt-3">Notes</MudText>
+                    <MudText Typo="Typo.body2" Style="white-space: pre-wrap" id="source-notes">@(string.IsNullOrWhiteSpace(s.Notes) ? "None" : s.Notes)</MudText>
+                    <MudButton Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Edit" Class="mt-2" OnClick="StartEdit" id="source-edit">Edit license and notes</MudButton>
+                }
+                else
+                {
+                    <MudGrid Spacing="2" Class="mt-1" Style="max-width: 900px">
+                        <MudItem xs="12" sm="4"><MudTextField @bind-Value="_edit.Kind" Label="License" Placeholder="e.g. CC0, CC-BY 4.0, Asset Store EULA" Margin="Margin.Dense" /></MudItem>
+                        <MudItem xs="6" sm="4">
+                            <MudSelect T="TriState" @bind-Value="_edit.Commercial" Label="Commercial use" Margin="Margin.Dense" Dense="true">
+                                <MudSelectItem Value="TriState.Unknown">Unknown</MudSelectItem>
+                                <MudSelectItem Value="TriState.Yes">Allowed</MudSelectItem>
+                                <MudSelectItem Value="TriState.No">Not allowed</MudSelectItem>
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="6" sm="4">
+                            <MudSelect T="TriState" @bind-Value="_edit.Attribution" Label="Attribution" Margin="Margin.Dense" Dense="true">
+                                <MudSelectItem Value="TriState.Unknown">Unknown</MudSelectItem>
+                                <MudSelectItem Value="TriState.Yes">Required</MudSelectItem>
+                                <MudSelectItem Value="TriState.No">Not required</MudSelectItem>
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="12"><MudTextField @bind-Value="_edit.AttributionText" Label="Attribution text" Lines="2" AutoGrow="true" Margin="Margin.Dense" /></MudItem>
+                        <MudItem xs="12"><MudTextField @bind-Value="_edit.Notes" Label="Notes" Lines="3" AutoGrow="true" Margin="Margin.Dense" id="source-notes-edit" /></MudItem>
+                    </MudGrid>
+                    <MudStack Row="true" Spacing="2" Class="mt-2">
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveAsync" id="source-save">Save</MudButton>
+                        <MudButton Variant="Variant.Text" OnClick="() => _edit = null">Cancel</MudButton>
+                    </MudStack>
+                }
+
+                @if (_d.Children.Count > 0)
+                {
+                    <MudText Typo="Typo.subtitle2" Class="mt-3">Nested sources</MudText>
+                    <MudList T="long" Dense="true">
+                        @foreach (var (child, count) in _d.Children)
+                        {
+                            <MudListItem T="long" OnClick="() => Select(child.Id)">
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                                    <MudIcon Icon="@KindIcon(child.Kind)" Size="Size.Small" Class="mud-text-secondary" />
+                                    <MudText Typo="Typo.body2" Style="flex: 1">@child.DisplayName</MudText>
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary">@count.ToString("N0") assets</MudText>
+                                </MudStack>
+                            </MudListItem>
+                        }
+                    </MudList>
+                }
+            </MudPaper>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public long? Id { get; set; }
+
+    private IReadOnlyList<SourceCount>? _sources;
+    private SourceDetails? _d;
+    private EditModel? _edit;
+    private string? _filter;
+    private long? _loadedId;
+
+    private sealed class EditModel
+    {
+        public string? Kind { get; set; }
+        public TriState Commercial { get; set; }
+        public TriState Attribution { get; set; }
+        public string? AttributionText { get; set; }
+        public string? Notes { get; set; }
+    }
+
+    private IEnumerable<SourceCount> Visible => string.IsNullOrWhiteSpace(_filter)
+        ? _sources!
+        : _sources!.Where(s => s.Name.Contains(_filter.Trim(), StringComparison.OrdinalIgnoreCase));
+
+    private int Total => _sources?.FirstOrDefault(s => s.Id == Id)?.Count ?? _d?.OwnAssets ?? 0;
+
+    private List<BreadcrumbItem> ChainCrumbs => _d!.Chain.Select(c => new BreadcrumbItem(c.DisplayName, $"sources/{c.Id}", c.Id == _d.Source.Id)).ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Catalog.ContentChanged += OnCatalogChanged;
+        _sources = await Stats.SourcesAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Id == _loadedId) return;
+        _loadedId = Id;
+        _edit = null;
+        _d = null;
+        if (Id is { } id) _d = await SourceData.LoadAsync(id);
+    }
+
+    private void Select(long id) => Nav.NavigateTo($"sources/{id}");
+
+    private void OnCatalogChanged() => InvokeAsync(async () =>
+    {
+        _sources = await Stats.SourcesAsync();
+        if (Id is { } id) _d = await SourceData.LoadAsync(id);
+        StateHasChanged();
+    });
+
+    private void StartEdit()
+    {
+        var s = _d!.Source;
+        _edit = new EditModel
+        {
+            Kind = s.License.Kind, Commercial = s.License.Commercial, Attribution = s.License.Attribution,
+            AttributionText = s.License.AttributionText, Notes = s.Notes,
+        };
+    }
+
+    private async Task SaveAsync()
+    {
+        var s = _d!.Source;
+        var e = _edit!;
+        var license = s.License.Clone();
+        license.Kind = string.IsNullOrWhiteSpace(e.Kind) ? null : e.Kind.Trim();
+        license.Commercial = e.Commercial;
+        license.Attribution = e.Attribution;
+        license.AttributionText = string.IsNullOrWhiteSpace(e.AttributionText) ? null : e.AttributionText.Trim();
+        var licenseChanged = license.Kind != s.License.Kind || license.Commercial != s.License.Commercial
+                             || license.Attribution != s.License.Attribution || license.AttributionText != s.License.AttributionText;
+        var notes = string.IsNullOrWhiteSpace(e.Notes) ? null : e.Notes.Trim();
+        var update = new AssetManager.Core.Domain.SourceUpdate
+        {
+            License = licenseChanged ? license : null,
+            Notes = notes != s.Notes ? notes ?? "" : null,
+        };
+        if (await Ui.RunAsync(() => Edits.EditSourceAsync(s.Id, update), "Source saved."))
+        {
+            _edit = null;
+            _d = await SourceData.LoadAsync(s.Id);
+        }
+    }
+
+    private async Task DeleteAsync()
+    {
+        var s = _d!.Source;
+        var count = await Deletion.CountSourceAssetsAsync([s.Id]);
+        var nested = _d.Children.Count > 0 ? " and the sources nested in it" : "";
+        var ok = await Dialogs.ShowMessageBoxAsync("Delete source",
+            $"Delete \"{s.DisplayName}\"{nested} and its {Assets(count)} from the catalog? Their previews, tags and stored copies are removed too. The original files on disk are not touched.",
+            yesText: $"Delete {Assets(count)}", cancelText: "Cancel");
+        if (ok != true) return;
+        if (await Ui.RunAsync(async () => { await Deletion.DeleteSourcesAsync([s.Id]); }, $"Deleted \"{s.DisplayName}\" and {Assets(count)}."))
+            Nav.NavigateTo("sources");
+    }
+
+    private static string Assets(int n) => n == 1 ? "1 asset" : $"{n:N0} assets";
+
+    private Task OpenLinkAsync(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var u) && (u.Scheme == Uri.UriSchemeHttp || u.Scheme == Uri.UriSchemeHttps)
+            ? Ui.RunAsync(() => Shell.OpenAsync(u.AbsoluteUri))
+            : Task.CompletedTask;
+
+    private static string? StoreUrl(Source s) => string.IsNullOrWhiteSpace(s.Store.Url) ? null : s.Store.Url;
+
+    /// <summary>The location with the volume's current drive letter when it is mounted.</summary>
+    private string LocationText(Location location) =>
+        location.Display(location.VolumeId is { } vol ? Volumes.GetRoot(vol) : null);
+
+    private static bool HasStoreInfo(StoreInfo s) => s.Title is not null || s.Publisher is not null || s.Version is not null || s.StoreId is not null;
+
+    private static string BrowseHref(long sourceId) => "browse?q=" + new SearchQuery { SourceId = sourceId }.ToToken();
+
+    public static string KindIcon(SourceKind kind) => kind switch
+    {
+        SourceKind.Folder => Icons.Material.Filled.Folder,
+        SourceKind.Archive => Icons.Material.Filled.FolderZip,
+        SourceKind.UnityPackage => Icons.Material.Filled.Inventory2,
+        _ => Icons.Material.Filled.InsertDriveFile,
+    };
+
+    private static string KindLabel(SourceKind kind) => kind switch
+    {
+        SourceKind.UnityPackage => "Unity package",
+        _ => kind.ToString(),
+    };
+
+    public void Dispose() => Catalog.ContentChanged -= OnCatalogChanged;
+}

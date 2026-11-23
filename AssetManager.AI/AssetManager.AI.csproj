@@ -1,0 +1,60 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\AssetManager.Core\AssetManager.Core.csproj" />
+    <ProjectReference Include="..\AssetManager.Data\AssetManager.Data.csproj" />
+    <ProjectReference Include="..\AssetManager.Processing\AssetManager.Processing.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="AngleSharp" Version="1.10.2" />
+    <PackageReference Include="Microsoft.Extensions.AI" Version="11.0.0" />
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="11.0.0" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <!--
+    Bundled llama.cpp server (MIT), design D7: Vulkan build for GPUs and a CPU build, pinned release, downloaded once at
+    build time, verified by SHA-256 and kept (git-ignored) in native/llama/{vulkan,cpu}. Copied to the output as llama/*.
+  -->
+  <PropertyGroup>
+    <LlamaRelease>b12141</LlamaRelease>
+    <LlamaBaseUrl>https://github.com/ggml-org/llama.cpp/releases/download/$(LlamaRelease)/</LlamaBaseUrl>
+    <LlamaDir>$(MSBuildThisFileDirectory)native/llama/</LlamaDir>
+    <LlamaDownloadDir>$(MSBuildThisFileDirectory)obj/llama-download/</LlamaDownloadDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <LlamaBuild Include="vulkan" Zip="llama-$(LlamaRelease)-bin-win-vulkan-x64.zip" Sha256="0C261A82B5B42F8974CEBA249B215C98FB75A3CC5720A16F7B2BFC1AD91CFB14" />
+    <LlamaBuild Include="cpu" Zip="llama-$(LlamaRelease)-bin-win-cpu-x64.zip" Sha256="22D1102219A8F97287272D06E615B9A3F3CFC3BDBE5FB327E4B9C1EEC042933C" />
+  </ItemGroup>
+
+  <Target Name="FetchLlama" Condition="!Exists('$(LlamaDir)$(LlamaRelease).txt')">
+    <DownloadFile SourceUrl="$(LlamaBaseUrl)%(LlamaBuild.Zip)" DestinationFolder="$(LlamaDownloadDir)" DestinationFileName="%(LlamaBuild.Identity).zip" Retries="2" />
+    <VerifyFileHash File="$(LlamaDownloadDir)%(LlamaBuild.Identity).zip" Hash="%(LlamaBuild.Sha256)" Algorithm="SHA256" />
+    <RemoveDir Directories="$(LlamaDir)" />
+    <Unzip SourceFiles="$(LlamaDownloadDir)%(LlamaBuild.Identity).zip" DestinationFolder="$(LlamaDownloadDir)%(LlamaBuild.Identity)" OverwriteReadOnlyFiles="true" />
+    <ItemGroup>
+      <!-- Only what llama-server needs: skip the other tools' implementation DLLs (cli, bench, quantize…). -->
+      <_LlamaFiles Include="$(LlamaDownloadDir)%(LlamaBuild.Identity)/**/*.dll;$(LlamaDownloadDir)%(LlamaBuild.Identity)/**/llama-server.exe;$(LlamaDownloadDir)%(LlamaBuild.Identity)/**/LICENSE*"
+                   Exclude="$(LlamaDownloadDir)%(LlamaBuild.Identity)/**/llama-*-impl.dll" Build="%(LlamaBuild.Identity)" />
+      <_LlamaFiles Include="$(LlamaDownloadDir)%(LlamaBuild.Identity)/**/llama-server-impl.dll" Build="%(LlamaBuild.Identity)" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_LlamaFiles)" DestinationFolder="$(LlamaDir)%(_LlamaFiles.Build)/" />
+    <WriteLinesToFile File="$(LlamaDir)$(LlamaRelease).txt" Lines="llama.cpp $(LlamaRelease) (MIT)" Overwrite="true" />
+    <RemoveDir Directories="$(LlamaDownloadDir)" />
+  </Target>
+
+  <Target Name="IncludeLlama" BeforeTargets="AssignTargetPaths" DependsOnTargets="FetchLlama">
+    <ItemGroup>
+      <_LlamaOut Include="$(LlamaDir)**/*" />
+      <None Include="@(_LlamaOut)" Link="llama/%(_LlamaOut.RecursiveDir)%(_LlamaOut.Filename)%(_LlamaOut.Extension)" CopyToOutputDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
+
+</Project>

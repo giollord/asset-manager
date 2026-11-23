@@ -1,14 +1,17 @@
-﻿namespace AssetManager;
+namespace AssetManager;
 
 public partial class App : Application
 {
-    public App()
+    private readonly AssetManager.Core.Platform.FileDropBroker _drops;
+
+    public App(AssetManager.Core.Platform.FileDropBroker drops)
     {
+        _drops = drops;
         InitializeComponent();
     }
 
     protected override Window CreateWindow(IActivationState? activationState)
     {
-        return new Window(new MainPage()) { Title = "AssetManager" };
+        return new Window(new MainPage(_drops)) { Title = "AssetManager" };
     }
 }

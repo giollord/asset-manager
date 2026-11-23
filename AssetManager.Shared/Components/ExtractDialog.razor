@@ -1,0 +1,112 @@
+@using AssetManager.Core.Platform
+@using AssetManager.Processing.Export
+@inject AssetExporter Exporter
+@inject IFolderPicker Folders
+@inject UiActions Ui
+@inject ISnackbar Snackbar
+
+@*
+    Extract to folder (spec "Extract to folder", "Name conflict"): the folder and layout, then one question per file that
+    already exists (overwrite, skip or rename, optionally for all remaining). Returns the ExtractPayload to queue.
+*@
+<MudDialog>
+    <DialogContent>
+        @if (_conflicts is null)
+        {
+            <MudStack Spacing="2" Style="min-width: 480px">
+                <MudText Typo="Typo.body2">Extract @Count(AssetIds.Count) with their companion files.</MudText>
+                <MudStack Row="true" AlignItems="AlignItems.End" Spacing="2">
+                    <MudTextField @bind-Value="_folder" Label="Target folder" Margin="Margin.Dense" Style="flex: 1" Class="extract-folder" Immediate="true" />
+                    <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.FolderOpen" OnClick="PickAsync" Class="extract-pick">Browse</MudButton>
+                </MudStack>
+                <MudRadioGroup T="bool" @bind-Value="_preserve">
+                    <MudRadio T="bool" Value="true" Class="extract-preserve">Keep the original folder structure (e.g. Assets/...)</MudRadio>
+                    <MudRadio T="bool" Value="false" Class="extract-flat">Write all files into the folder (flat)</MudRadio>
+                </MudRadioGroup>
+            </MudStack>
+        }
+        else
+        {
+            var name = _conflicts[_index];
+            <MudStack Spacing="2" Style="min-width: 480px" id="extract-conflict">
+                <MudText Typo="Typo.body2">@(_index + 1) of @_conflicts.Count: this file already exists in the target folder, or another selected asset writes the same name.</MudText>
+                <MudText Typo="Typo.subtitle2" Style="word-break: break-all" Class="conflict-name">@name</MudText>
+                <MudCheckBox T="bool" @bind-Value="_applyToAll" Label="@($"Do this for all {_conflicts.Count - _index} remaining conflicts")" Dense="true" Class="conflict-all"
+                             Disabled="_conflicts.Count - _index <= 1" />
+            </MudStack>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="() => Dialog.Cancel()">Cancel</MudButton>
+        @if (_conflicts is null)
+        {
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="string.IsNullOrWhiteSpace(_folder) || _planning" OnClick="PlanAsync" Class="extract-ok">Extract</MudButton>
+        }
+        else
+        {
+            <MudButton Variant="Variant.Outlined" OnClick="() => Decide(ConflictChoice.Skip)" Class="conflict-skip">Skip</MudButton>
+            <MudButton Variant="Variant.Outlined" OnClick="() => Decide(ConflictChoice.Rename)" Class="conflict-rename">Keep both (rename)</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Warning" OnClick="() => Decide(ConflictChoice.Overwrite)" Class="conflict-overwrite">Overwrite</MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] public IMudDialogInstance Dialog { get; set; } = null!;
+
+    [Parameter] public IReadOnlyCollection<long> AssetIds { get; set; } = [];
+
+    private string? _folder;
+    private bool _preserve = true;
+    private bool _planning;
+    private IReadOnlyList<string>? _conflicts;
+    private int _index;
+    private bool _applyToAll;
+    private readonly Dictionary<string, ConflictChoice> _choices = new(StringComparer.OrdinalIgnoreCase);
+
+    private static string Count(int n) => n == 1 ? "1 asset" : $"{n:N0} assets";
+
+    private async Task PickAsync()
+    {
+        var picked = await Ui.RunAsync(() => Folders.PickFolderAsync());
+        if (picked is not null) _folder = picked;
+    }
+
+    private async Task PlanAsync()
+    {
+        _planning = true;
+        try
+        {
+            var folder = _folder!.Trim();
+            if (!Path.IsPathFullyQualified(folder))
+            {
+                Snackbar.Add("Enter a full folder path, such as D:\\Project\\Assets.", Severity.Warning);
+                return;
+            }
+            _folder = folder;
+            var plan = await Ui.RunAsync(() => Exporter.PlanAsync(AssetIds, folder, _preserve));
+            if (plan is null) return;
+            if (plan.Conflicts.Count == 0) Finish(ConflictChoice.Rename);
+            else _conflicts = plan.Conflicts;
+        }
+        finally
+        {
+            _planning = false;
+        }
+    }
+
+    private void Decide(ConflictChoice choice)
+    {
+        if (_applyToAll)
+        {
+            Finish(choice);
+            return;
+        }
+        _choices[_conflicts![_index]] = choice;
+        if (++_index >= _conflicts.Count) Finish(ConflictChoice.Rename);
+    }
+
+    /// <summary>Closes with the payload; <paramref name="rest"/> covers the conflicts not decided one by one.</summary>
+    private void Finish(ConflictChoice rest) =>
+        Dialog.Close(DialogResult.Ok(new ExtractPayload([.. AssetIds], _folder!, _preserve, rest, new Dictionary<string, ConflictChoice>(_choices))));
+}

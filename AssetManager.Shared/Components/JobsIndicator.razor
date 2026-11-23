@@ -1,0 +1,59 @@
+@using AssetManager.Core.Jobs
+@implements IDisposable
+@inject IProgressHub Hub
+@inject NavigationManager Nav
+
+@* App-bar indicator (design D8): active job count and combined progress; opens a quick view that links to the Jobs page. *@
+@if (_active.Count == 0)
+{
+    <MudTooltip Text="Background jobs">
+        <MudIconButton Icon="@Icons.Material.Filled.Sync" Color="Color.Inherit" Href="jobs" aria-label="Jobs" />
+    </MudTooltip>
+}
+else
+{
+    <MudMenu AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" id="jobs-indicator">
+        <ActivatorContent>
+            <MudTooltip Text="@($"{_active.Count} active job{(_active.Count == 1 ? "" : "s")}")">
+                <MudBadge Content="@_active.Count" Color="Color.Secondary" Overlap="true" Class="mx-2">
+                    <MudProgressCircular Color="Color.Inherit" Size="Size.Small" StrokeWidth="4"
+                                         Value="@(Combined * 100)" Indeterminate="@(Combined == 0)" aria-label="Active jobs" />
+                </MudBadge>
+            </MudTooltip>
+        </ActivatorContent>
+        <ChildContent>
+            <div class="pa-3" style="width: 380px; max-width: 90vw" id="jobs-quick-view">
+                @foreach (var job in _active.Take(6))
+                {
+                    <div class="mb-3"><JobProgressView Job="job" Compact="true" /></div>
+                }
+                @if (_active.Count > 6)
+                {
+                    <MudText Typo="Typo.caption">and @(_active.Count - 6) more</MudText>
+                }
+                <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => Nav.NavigateTo("jobs"))">Open Jobs page</MudButton>
+            </div>
+        </ChildContent>
+    </MudMenu>
+}
+
+@code {
+    private List<JobSnapshot> _active = [];
+
+    /// <summary>Average progress of the active jobs whose progress is known.</summary>
+    private double Combined => _active.Select(j => j.Fraction).OfType<double>().DefaultIfEmpty(0).Average();
+
+    protected override void OnInitialized()
+    {
+        _active = Hub.Active.ToList();
+        Hub.Changed += OnChanged;
+    }
+
+    private void OnChanged(JobSnapshot _) => InvokeAsync(() =>
+    {
+        _active = Hub.Active.ToList();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Hub.Changed -= OnChanged;
+}

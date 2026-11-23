@@ -1,0 +1,174 @@
+@page "/jobs"
+@using AssetManager.AI.Enrichment
+@using AssetManager.Core.Domain
+@using AssetManager.Core.Jobs
+@using AssetManager.Data.Jobs
+@implements IDisposable
+@inject IProgressHub Hub
+@inject JobQueue Queue
+@inject AiQueue Ai
+@inject AssetManager.Data.CatalogStore Catalog
+@inject Services.UiActions Ui
+
+<PageTitle>Jobs</PageTitle>
+
+<MudText Typo="Typo.h4" GutterBottom="true">Jobs</MudText>
+
+<MudGrid Spacing="3">
+    <MudItem xs="12" md="7">
+        <MudText Typo="Typo.h6" Class="mb-2">Active</MudText>
+        @if (_active.Count == 0)
+        {
+            <MudText Typo="Typo.body2" Class="mud-text-secondary" id="no-active-jobs">No jobs are running.</MudText>
+        }
+        @foreach (var job in _active)
+        {
+            <MudPaper Outlined="true" Class="pa-3 mb-2"><JobProgressView Job="job" Retried="OnRetried" /></MudPaper>
+        }
+    </MudItem>
+
+    <MudItem xs="12" md="5">
+        <MudPaper Outlined="true" Class="pa-3" id="ai-queue">
+            <MudStack Row="true" AlignItems="AlignItems.Center">
+                <MudText Typo="Typo.h6" Class="flex-grow-1">AI queue</MudText>
+                @if (_ai?.Paused == true)
+                {
+                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.PlayArrow" OnClick="Resume" id="ai-resume">Resume</MudButton>
+                }
+                else
+                {
+                    <MudButton Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Pause" OnClick="Pause" id="ai-pause">Pause</MudButton>
+                }
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error" Disabled="@(_ai is not { Pending: > 0 })" OnClick="CancelAiAsync" id="ai-cancel">Cancel</MudButton>
+            </MudStack>
+            @if (_ai is { } s)
+            {
+                <MudSimpleTable Dense="true" Elevation="0" Class="mt-2">
+                    <tbody>
+                        <tr><td>Pending</td><td id="ai-pending">@s.Pending.ToString("N0")@(s.Paused ? " (paused)" : "")</td></tr>
+                        <tr><td>Rate</td><td id="ai-rate">@(s.ItemsPerMinute > 0 ? $"{s.ItemsPerMinute:0.#} items/min" : "-")</td></tr>
+                        <tr><td>Time to finish</td><td id="ai-drain">@(s.TimeToDrain is { } d ? (d == TimeSpan.Zero ? "-" : "about " + JobProgressView.Duration(d)) : "measuring...")</td></tr>
+                        <tr><td>This run</td><td id="ai-run">@s.Completed.ToString("N0") done, @s.Failed.ToString("N0") failed</td></tr>
+                    </tbody>
+                </MudSimpleTable>
+            }
+        </MudPaper>
+    </MudItem>
+
+    <MudItem xs="12">
+        <MudText Typo="Typo.h6" Class="mb-2">History</MudText>
+        @if (_history.Count == 0)
+        {
+            <MudText Typo="Typo.body2" Class="mud-text-secondary">No finished jobs yet.</MudText>
+        }
+        <MudExpansionPanels MultiExpansion="true" Outlined="true">
+            @foreach (var job in _history)
+            {
+                <MudExpansionPanel Expanded="@(job.Id == SelectedJob)" ExpandedChanged="@(open => OnExpand(job, open))" id="@($"history-{job.Id}")">
+                    <TitleContent><JobProgressView Job="job" Retried="OnRetried" /></TitleContent>
+                    <ChildContent>
+                        <MudText Typo="Typo.caption" Class="d-block mb-2">
+                            Created @job.CreatedAt.ToLocalTime().ToString("g")@(job.FinishedAt is { } f ? $", finished {f.ToLocalTime():g}" : "")@(job.ParentJobId is { } p ? $", retry of job {p}" : "")
+                        </MudText>
+                        @if (_errors.TryGetValue(job.Id, out var errors))
+                        {
+                            @if (errors.Count == 0)
+                            {
+                                <MudText Typo="Typo.body2">No failed items.</MudText>
+                            }
+                            else
+                            {
+                                <MudSimpleTable Dense="true" Elevation="0" Class="job-errors">
+                                    <thead><tr><th></th><th>Item</th><th>Reason</th></tr></thead>
+                                    <tbody>
+                                        @foreach (var e in errors.Take(500))
+                                        {
+                                            <tr>
+                                                <td><MudIcon Icon="@(e.IsWarning ? Icons.Material.Filled.Warning : Icons.Material.Filled.Error)" Color="@(e.IsWarning ? Color.Warning : Color.Error)" Size="Size.Small" /></td>
+                                                <td>@(e.ItemName ?? e.ItemRef)</td>
+                                                <td>@e.Reason</td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </MudSimpleTable>
+                                @if (errors.Count > 500) { <MudText Typo="Typo.caption">and @(errors.Count - 500) more</MudText> }
+                            }
+                        }
+                    </ChildContent>
+                </MudExpansionPanel>
+            }
+        </MudExpansionPanels>
+    </MudItem>
+</MudGrid>
+
+@code {
+    /// <summary>Job to open, from a notification's "Details" link.</summary>
+    [SupplyParameterFromQuery(Name = "job")] public long? SelectedJob { get; set; }
+
+    private List<JobSnapshot> _active = [];
+    private List<JobSnapshot> _history = [];
+    private readonly Dictionary<long, List<JobItemError>> _errors = new();
+    private AiQueueStatus? _ai;
+    private Timer? _timer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Hub.Changed += OnJobChanged;
+        Hub.Finished += OnJobFinished;
+        Ai.Changed += OnAiChanged;
+        _active = Hub.Active.ToList();
+        await LoadHistoryAsync();
+        await RefreshAiAsync();
+        // Elapsed times and the AI rate change without events; refresh them every second.
+        _timer = new Timer(_ => InvokeAsync(async () => { await RefreshAiAsync(); StateHasChanged(); }), null, 1000, 1000);
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (SelectedJob is { } id && !_errors.ContainsKey(id)) _errors[id] = await Queue.ItemErrorsAsync(id);
+    }
+
+    private async Task LoadHistoryAsync() =>
+        _history = (await Queue.HistoryAsync(JobQueue.HistoryLimit)).Where(j => !j.IsActive).ToList();
+
+    private async Task RefreshAiAsync()
+    {
+        if (Catalog.Path is not null) _ai = await Ai.StatusAsync();
+    }
+
+    private async Task OnExpand(JobSnapshot job, bool open)
+    {
+        if (open && !_errors.ContainsKey(job.Id)) _errors[job.Id] = await Queue.ItemErrorsAsync(job.Id);
+    }
+
+    private void OnJobChanged(JobSnapshot _) => InvokeAsync(() =>
+    {
+        _active = Hub.Active.ToList();
+        StateHasChanged();
+    });
+
+    private void OnJobFinished(JobSnapshot job) => InvokeAsync(async () =>
+    {
+        _errors.Remove(job.Id);
+        await LoadHistoryAsync();
+        StateHasChanged();
+    });
+
+    private void OnAiChanged() => InvokeAsync(async () => { await RefreshAiAsync(); StateHasChanged(); });
+
+    private Task OnRetried(long _) => Task.CompletedTask; // the new job appears through the hub
+
+    private void Pause() => Ai.Pause();
+
+    private void Resume() => Ai.Resume();
+
+    private Task CancelAiAsync() => Ui.RunAsync(() => Ai.CancelAsync(), "AI queue cancelled.");
+
+    public void Dispose()
+    {
+        Hub.Changed -= OnJobChanged;
+        Hub.Finished -= OnJobFinished;
+        Ai.Changed -= OnAiChanged;
+        _timer?.Dispose();
+    }
+}

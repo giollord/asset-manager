@@ -1,0 +1,41 @@
+@using AssetManager.Core.Domain
+@using AssetManager.Core.Jobs
+@implements IDisposable
+@inject IProgressHub Hub
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+
+@* The single subscriber that turns finished jobs into snackbar notifications (design D8). Renders nothing. *@
+
+@code {
+    protected override void OnInitialized() => Hub.Finished += OnFinished;
+
+    private void OnFinished(JobSnapshot job) => InvokeAsync(() => Notify(job));
+
+    public static (string Message, Severity Severity) Describe(JobSnapshot job) => job.State switch
+    {
+        JobState.Completed when job.Errors > 0 => ($"{job.Title} finished with {job.Errors} error{(job.Errors == 1 ? "" : "s")}.", Severity.Warning),
+        JobState.Completed => ($"{job.Title} finished.", Severity.Success),
+        JobState.Failed => ($"{job.Title} failed: {job.Error}", Severity.Error),
+        _ => ($"{job.Title} was cancelled.", Severity.Info),
+    };
+
+    private void Notify(JobSnapshot job)
+    {
+        var (message, severity) = Describe(job);
+        Snackbar.Add(message, severity, options =>
+        {
+            options.Action = "Details";
+            options.ActionColor = Color.Inherit;
+            options.RequireInteraction = false; // with an action MudBlazor would otherwise keep it until clicked
+            options.VisibleStateDuration = AssetManagerServiceCollectionExtensions.ToastDuration;
+            options.OnClick = _ =>
+            {
+                Nav.NavigateTo($"jobs?job={job.Id}");
+                return Task.CompletedTask;
+            };
+        }, key: $"job-{job.Id}");
+    }
+
+    public void Dispose() => Hub.Finished -= OnFinished;
+}

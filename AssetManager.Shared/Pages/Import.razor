@@ -1,0 +1,410 @@
+@page "/import"
+@using AssetManager.AI.Import
+@using AssetManager.Core.Domain
+@using AssetManager.Core.Jobs
+@using AssetManager.Core.Platform
+@using AssetManager.Processing.Import
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.Extensions.Logging
+@implements IDisposable
+@inject ImportService Imports
+@inject IProgressHub Hub
+@inject AssetManager.Data.CatalogStore Catalog
+@inject FileDropBroker Drops
+@inject IFilePicker FilePicker
+@inject IFolderPicker FolderPicker
+@inject ISnackbar Snackbar
+@inject IAppSettingsStore AppSettings
+@inject AssetManager.Processing.Settings.ClassificationSettings Classification
+@inject Microsoft.Extensions.Logging.ILogger<Import> Log
+
+<PageTitle>Import</PageTitle>
+
+<MudText Typo="Typo.h4" GutterBottom="true">Import</MudText>
+
+<MudStepper @bind-ActiveIndex="_step" NonLinear="false" id="import-stepper">
+    <ActionContent Context="stepper"></ActionContent>
+    <ChildContent>
+        <MudStep Title="Inputs" Completed="_session is not null" Disabled="_session is not null">
+            <MudPaper Outlined="true" Class="drop-zone pa-4 mb-4" id="drop-zone">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Spacing="2">
+                    <MudIcon Icon="@Icons.Material.Filled.FileUpload" />
+                    <MudText Class="flex-grow-1">Drop files, folders, archives or <code>.unitypackage</code> files here, or add them:</MudText>
+                    <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.InsertDriveFile" OnClick="AddFilesAsync" id="add-files">Add files</MudButton>
+                    <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Folder" OnClick="AddFolderAsync" id="add-folder">Add folder</MudButton>
+                </MudStack>
+                <MudTextField T="string" @bind-Value="_pathDraft" Placeholder="Or paste a path and press Enter" Immediate="true" OnKeyDown="OnPathKeyDown"
+                              Margin="Margin.Dense" Class="mt-2" id="path-input" />
+                @if (_inputs.Count > 0)
+                {
+                    <MudList T="string" Dense="true" Class="mt-2" id="import-inputs">
+                        @foreach (var input in _inputs)
+                        {
+                            <MudListItem T="string" Icon="@InputIcon(input)">
+                                <MudStack Row="true" AlignItems="AlignItems.Center">
+                                    <MudText Typo="Typo.body2" Class="flex-grow-1 import-input">@input</MudText>
+                                    <MudIconButton Size="Size.Small" Icon="@Icons.Material.Filled.Close" aria-label="Remove" OnClick="() => _inputs.Remove(input)" />
+                                </MudStack>
+                            </MudListItem>
+                        }
+                    </MudList>
+                }
+            </MudPaper>
+
+            <MudGrid Spacing="3">
+                <MudItem xs="12" md="6">
+                    <MudTextField T="string" @bind-Value="_tagDraft" Label="Shared tags" HelperText="Every asset of this import gets these tags. Press Enter to add."
+                                  OnKeyDown="OnTagKeyDown" Immediate="true" id="shared-tag-input" />
+                    <MudChipSet T="string" AllClosable="true" OnClose="chip => _tags.Remove(chip.Value!)" Class="mt-1" id="shared-tags">
+                        @foreach (var tag in _tags)
+                        {
+                            <MudChip T="string" Value="tag" Text="@tag" Size="Size.Small" />
+                        }
+                    </MudChipSet>
+                </MudItem>
+                <MudItem xs="12" md="6">
+                    <MudRadioGroup T="AiDepth" @bind-Value="_depth" id="ai-depth">
+                        <MudRadio Value="AiDepth.Full">Full AI enrichment</MudRadio>
+                        <MudRadio Value="AiDepth.PackOnly">Pack summary only</MudRadio>
+                        <MudRadio Value="AiDepth.None">No AI</MudRadio>
+                    </MudRadioGroup>
+                    <MudSwitch T="bool" @bind-Value="_includeDuplicates" Color="Color.Primary" Label="Include files that are already cataloged" id="include-duplicates" />
+                </MudItem>
+                <MudItem xs="12" md="6">
+                    <MudTooltip Text="@string.Join(", ", _defaultIgnores)" Placement="Placement.Top">
+                        <MudSwitch T="bool" @bind-Value="_useDefaultIgnores" Color="Color.Primary" id="use-default-ignores"
+                                   Label="@($"Skip the default ignored folders ({_defaultIgnores.Count}, see Settings)")" />
+                    </MudTooltip>
+                </MudItem>
+                <MudItem xs="12" md="6">
+                    <MudTextField T="string" @bind-Value="_ignoreDraft" Label="Also ignore folders (this import only)" Immediate="true" OnKeyDown="OnIgnoreKeyDown"
+                                  HelperText="A folder name (Demo) or a path from the imported folder or package (Assets/*/Demo). Press Enter to add." id="ignore-input" />
+                    <MudChipSet T="string" AllClosable="true" OnClose="chip => _ignores.Remove(chip.Value!)" Class="mt-1" id="ignore-rules">
+                        @foreach (var rule in _ignores)
+                        {
+                            <MudChip T="string" Value="rule" Text="@rule" Size="Size.Small" Icon="@Icons.Material.Outlined.FolderOff" />
+                        }
+                    </MudChipSet>
+                </MudItem>
+                <MudItem xs="12">
+                    <MudTextField T="string" @bind-Value="_instruction" Label="Instruction for the AI (optional)" Lines="2" AutoGrow="true"
+                                  Disabled="_depth == AiDepth.None" Placeholder="e.g. these are all sci-fi UI elements; ignore the PSD sources" id="ai-instruction" />
+                </MudItem>
+            </MudGrid>
+
+            <MudStack Row="true" Justify="Justify.FlexEnd" Class="mt-4">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_inputs.Count == 0 || _busy" OnClick="StartAsync" id="start-import">Start import</MudButton>
+            </MudStack>
+        </MudStep>
+
+        <MudStep Title="Preview / Review" Completed="_state is ImportSessionState.Committing or ImportSessionState.Committed" Disabled="_session is null">
+            @if (_session is not null)
+            {
+                @if (_importJob is not null)
+                {
+                    <MudPaper Outlined="true" Class="pa-3 mb-3" id="import-progress"><JobProgressView Job="_importJob" /></MudPaper>
+                    @if (!_importJob.IsActive && _state is not ImportSessionState.Cancelled
+                         && (_importJob.State is JobState.Failed or JobState.Cancelled || _unenriched > 0))
+                    {
+                        <MudAlert Severity="Severity.Warning" Class="mb-3" id="import-resume-alert">
+                            @(_importJob.State is JobState.Failed or JobState.Cancelled
+                                ? "The import stopped before it finished. Resuming continues after the last stage that completed."
+                                : $"{_unenriched} assets were left without AI enrichment. Resuming tries them again.")
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" Class="ml-3" OnClick="ResumeAsync" id="import-resume">Resume import</MudButton>
+                        </MudAlert>
+                    }
+                }
+                <MudText Typo="Typo.body2" Class="mud-text-secondary mb-3" id="import-state">@StateText</MudText>
+                @if (_state == ImportSessionState.Ready)
+                {
+                    <ImportReview SessionId="_session.Id" />
+                }
+                <MudStack Row="true" Justify="Justify.FlexEnd" Spacing="2" Class="mt-2">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Error" Disabled="_busy || _state is not (ImportSessionState.Scanning or ImportSessionState.Ready)"
+                               OnClick="CancelAsync" id="cancel-import">Cancel import</MudButton>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_busy || _state != ImportSessionState.Ready" OnClick="ConfirmAsync" id="confirm-import">Confirm</MudButton>
+                </MudStack>
+            }
+        </MudStep>
+
+        <MudStep Title="Confirm" Completed="_state == ImportSessionState.Committed" Disabled="_state is not (ImportSessionState.Committing or ImportSessionState.Committed)">
+            @if (_commitJob is not null)
+            {
+                <MudPaper Outlined="true" Class="pa-3 mb-3" id="commit-progress"><JobProgressView Job="_commitJob" /></MudPaper>
+            }
+            @if (_state == ImportSessionState.Committed)
+            {
+                <MudAlert Severity="Severity.Success" Class="mb-3" id="import-committed">
+                    The import is in the catalog.@(_importJob?.IsActive == true ? " AI enrichment continues in the background." : "")
+                </MudAlert>
+                <MudStack Row="true" Justify="Justify.FlexEnd" Spacing="2">
+                    <MudButton Variant="Variant.Outlined" Href="browse">Browse</MudButton>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Reset" id="new-import">New import</MudButton>
+                </MudStack>
+            }
+        </MudStep>
+    </ChildContent>
+</MudStepper>
+
+@code {
+    private int _step;
+    private readonly List<string> _inputs = [];
+    private readonly List<string> _tags = [];
+    private string? _tagDraft;
+    private string? _instruction;
+    private AiDepth _depth = AiDepth.Full;
+    private bool _includeDuplicates;
+    private bool _useDefaultIgnores = true;
+    private string? _ignoreDraft;
+    private readonly List<string> _ignores = [];
+    private IReadOnlyList<string> _defaultIgnores = [];
+    private bool _busy;
+
+    private ImportSession? _session;
+    private ImportSessionState? _state;
+    private JobSnapshot? _importJob;
+    private int _unenriched; // Full-AI session assets left not enriched or failed
+    private long? _commitJobId;
+    private JobSnapshot? _commitJob;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _depth = AppSettings.Current.DefaultAiDepth;
+        _defaultIgnores = (await Classification.GetAsync()).IgnoredFolders;
+        Hub.Changed += OnJobChanged;
+        Hub.Finished += OnJobFinished;
+        Drops.Dropped += OnDropped;
+        AddInputs(Drops.TakePending());
+        // An import that was not confirmed or cancelled (also after a restart) is shown again.
+        if ((await Imports.OpenSessionsAsync()).FirstOrDefault() is { } open) await ShowSessionAsync(open);
+    }
+
+    private string StateText => _state switch
+    {
+        ImportSessionState.Scanning => "Reading the inputs and generating previews. You can confirm once the previews are done.",
+        ImportSessionState.Ready => _importJob?.IsActive == true
+            ? "Previews are ready. You can confirm now; AI enrichment continues in the background after the commit."
+            : "Ready to confirm.",
+        _ => "",
+    };
+
+    private static string InputIcon(string path) =>
+        Directory.Exists(path) ? Icons.Material.Filled.Folder
+        : path.EndsWith(".unitypackage", StringComparison.OrdinalIgnoreCase) ? Icons.Material.Filled.Inventory2
+        : Icons.Material.Filled.InsertDriveFile;
+
+    private void OnDropped() => InvokeAsync(() =>
+    {
+        if (_session is not null)
+        {
+            Snackbar.Add("Finish or cancel the current import before adding more inputs.", Severity.Info);
+            return;
+        }
+        AddInputs(Drops.TakePending());
+        StateHasChanged();
+    });
+
+    private void AddInputs(IEnumerable<string> paths)
+    {
+        foreach (var path in paths)
+            if (!_inputs.Contains(path, StringComparer.OrdinalIgnoreCase)) _inputs.Add(path);
+    }
+
+    private async Task AddFilesAsync() => await PickAsync(async () => AddInputs(await FilePicker.PickFilesAsync(multiple: true)));
+
+    private async Task AddFolderAsync() => await PickAsync(async () =>
+    {
+        if (await FolderPicker.PickFolderAsync() is { } folder) AddInputs([folder]);
+    });
+
+    private async Task PickAsync(Func<Task> pick)
+    {
+        try { await pick(); }
+        catch (PlatformFeatureNotSupportedException e) { Snackbar.Add(e.Message, Severity.Warning); }
+    }
+
+    private string? _pathDraft;
+
+    private void OnPathKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key != "Enter" || string.IsNullOrWhiteSpace(_pathDraft)) return;
+        var path = _pathDraft.Trim().Trim('"');
+        if (File.Exists(path) || Directory.Exists(path))
+        {
+            AddInputs([path]);
+            _pathDraft = "";
+        }
+        else Snackbar.Add($"Not found: {path}", Severity.Warning);
+    }
+
+    private void OnTagKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key is not ("Enter" or ",")) return;
+        foreach (var tag in (_tagDraft ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            if (!_tags.Contains(tag, StringComparer.OrdinalIgnoreCase)) _tags.Add(tag);
+        _tagDraft = "";
+    }
+
+    private void OnIgnoreKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key is not ("Enter" or ",")) return;
+        foreach (var rule in (_ignoreDraft ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var normalized = AssetManager.Processing.Containers.FolderIgnoreRules.Normalize(rule);
+            if (normalized.Length > 0 && !_ignores.Contains(normalized, StringComparer.OrdinalIgnoreCase)) _ignores.Add(normalized);
+        }
+        _ignoreDraft = "";
+    }
+
+    private async Task StartAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(_tagDraft)) OnTagKeyDown(new KeyboardEventArgs { Key = "Enter" });
+        _busy = true;
+        try
+        {
+            var request = new ImportRequest([.. _inputs], [.. _tags], string.IsNullOrWhiteSpace(_instruction) ? null : _instruction.Trim(), _depth, _includeDuplicates,
+                [.. _ignores], _useDefaultIgnores);
+            await ShowSessionAsync(await Imports.StartAsync(request));
+        }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException)
+        {
+            Snackbar.Add(e.Message, Severity.Error);
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task ShowSessionAsync(ImportSession session)
+    {
+        _session = session;
+        await RefreshAsync();
+        _step = _state is ImportSessionState.Committing or ImportSessionState.Committed ? 2 : 1;
+    }
+
+    private async Task ResumeAsync()
+    {
+        try
+        {
+            await Imports.ResumeAsync(_session!.Id);
+            await RefreshAsync();
+        }
+        catch (InvalidOperationException e)
+        {
+            Snackbar.Add(e.Message, Severity.Warning);
+        }
+    }
+
+    private async Task RefreshAsync()
+    {
+        if (_session is null) return;
+        await using var db = Catalog.CreateDbContext();
+        var session = await db.ImportSessions.AsNoTracking().FirstOrDefaultAsync(s => s.Id == _session.Id);
+        if (session is null) return;
+        _session = session;
+        _state = session.State;
+        _importJob = await SnapshotAsync(db, session.JobId);
+        _unenriched = session.AiDepth == AiDepth.Full && _importJob is { IsActive: false }
+            ? await db.AllAssets.CountAsync(a => (a.ImportSessionId == session.Id || a.Source.CommittedFromSessionId == session.Id)
+                                                 && (a.AiStatus == AiStatus.NotEnriched || a.AiStatus == AiStatus.Failed))
+            : 0;
+        var payload = System.Text.Json.JsonSerializer.Serialize(new ImportPayload(session.Id), JobJson.Options);
+        _commitJobId ??= await db.Jobs.Where(j => j.Type == ImportCommitJob.JobType && j.PayloadJson == payload)
+            .OrderByDescending(j => j.Id).Select(j => (long?)j.Id).FirstOrDefaultAsync();
+        _commitJob = await SnapshotAsync(db, _commitJobId);
+    }
+
+    private async Task<JobSnapshot?> SnapshotAsync(AssetManager.Data.CatalogDbContext db, long? jobId)
+    {
+        if (jobId is not { } id) return null;
+        if (Hub.Get(id) is { } live) return live;
+        var job = await db.Jobs.AsNoTracking().FirstOrDefaultAsync(j => j.Id == id);
+        return job is null ? null : JobSnapshot.Of(job);
+    }
+
+    private async Task ConfirmAsync()
+    {
+        if (_session is null) return;
+        _busy = true;
+        try
+        {
+            _commitJobId = await Imports.ConfirmAsync(_session.Id);
+            await RefreshAsync();
+            _step = 2;
+        }
+        catch (InvalidOperationException e)
+        {
+            Snackbar.Add(e.Message, Severity.Warning);
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task CancelAsync()
+    {
+        if (_session is null) return;
+        _busy = true;
+        try
+        {
+            await Imports.CancelAsync(_session.Id);
+            Snackbar.Add("Import cancelled; nothing was added to the catalog.", Severity.Info);
+            Reset();
+        }
+        finally { _busy = false; }
+    }
+
+    private void Reset()
+    {
+        _session = null;
+        _state = null;
+        _importJob = _commitJob = null;
+        _commitJobId = null;
+        _inputs.Clear();
+        _tags.Clear();
+        _ignores.Clear();
+        _useDefaultIgnores = true;
+        _instruction = null;
+        _step = 0;
+    }
+
+    private bool Watches(long jobId) => _session?.JobId == jobId || _commitJobId == jobId;
+
+    private void OnJobChanged(JobSnapshot job)
+    {
+        if (!Watches(job.Id)) return;
+        Update(async () =>
+        {
+            if (_session?.JobId == job.Id)
+            {
+                _importJob = job;
+                // The session becomes ready for review once the previews are done (the AI stages follow).
+                if (_state == ImportSessionState.Scanning && job.StageIndex >= ImportStager.StageProcess + 1) await RefreshAsync();
+            }
+            else _commitJob = job;
+        });
+    }
+
+    private void OnJobFinished(JobSnapshot job)
+    {
+        if (!Watches(job.Id)) return;
+        Update(RefreshAsync);
+    }
+
+    /// <summary>Runs a hub-triggered update on the renderer; failures are logged instead of vanishing with the task.</summary>
+    private void Update(Func<Task> update) => _ = InvokeAsync(async () =>
+    {
+        try
+        {
+            await update();
+            StateHasChanged();
+        }
+        catch (Exception e)
+        {
+            Log.LogError(e, "Import wizard update failed");
+        }
+    });
+
+    public void Dispose()
+    {
+        Hub.Changed -= OnJobChanged;
+        Hub.Finished -= OnJobFinished;
+        Drops.Dropped -= OnDropped;
+    }
+}

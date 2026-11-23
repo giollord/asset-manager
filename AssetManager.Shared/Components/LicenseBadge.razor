@@ -1,0 +1,26 @@
+@using AssetManager.Core.Domain
+
+@* A source's or asset's license at a glance: green when commercial use is allowed, red when not. *@
+<MudTooltip Text="@Tooltip" Disabled="string.IsNullOrEmpty(Tooltip)">
+    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@ChipColor" Icon="@Icons.Material.Filled.Gavel" Class="license-badge">
+        @(string.IsNullOrWhiteSpace(License?.Kind) ? "License unknown" : License!.Kind)
+    </MudChip>
+</MudTooltip>
+
+@code {
+    [Parameter] public LicenseInfo? License { get; set; }
+
+    private Color ChipColor => License?.Commercial switch
+    {
+        TriState.Yes => Color.Success,
+        TriState.No => Color.Error,
+        _ => Color.Default,
+    };
+
+    private string Tooltip => License is null ? "" : string.Join(" · ", new[]
+    {
+        License.Commercial switch { TriState.Yes => "Commercial use allowed", TriState.No => "No commercial use", _ => null },
+        License.Attribution switch { TriState.Yes => $"Attribution required{(string.IsNullOrWhiteSpace(License.AttributionText) ? "" : $": {License.AttributionText}")}", TriState.No => "No attribution needed", _ => null },
+        License.Evidence is { Length: > 0 } e ? $"From {e}" : null,
+    }.Where(x => x is not null));
+}

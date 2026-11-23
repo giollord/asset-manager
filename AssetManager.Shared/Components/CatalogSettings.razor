@@ -1,0 +1,103 @@
+@using AssetManager.Core.Jobs
+@using AssetManager.Core.Platform
+@using AssetManager.Data.Search
+@using AssetManager.Data.Services
+@using AssetManager.Processing.Jobs
+@implements IDisposable
+@inject AssetManager.Data.CatalogStore Catalog
+@inject CatalogLocationService Location
+@inject ICatalogStatsService Stats
+@inject IFilePicker Files
+@inject IFolderPicker Folders
+@inject IJobQueue Jobs
+@inject UiActions Ui
+@inject ISnackbar Snackbar
+
+@* Catalog location (spec "Change catalog location"), size and compaction. *@
+<MudPaper Class="pa-4" Outlined="true" id="catalog-settings">
+    <MudText Typo="Typo.h6" Class="mb-2">Catalog</MudText>
+    <MudText Typo="Typo.body2">Open catalog: <b id="catalog-path">@Catalog.Path</b></MudText>
+    @if (_size is { } size)
+    {
+        <MudText Typo="Typo.body2" Class="mt-1" id="catalog-size">
+            Size @AssetManager.Shared.Pages.Dashboard.Bytes(size.Total) — previews @AssetManager.Shared.Pages.Dashboard.Bytes(size.Previews), stored originals @AssetManager.Shared.Pages.Dashboard.Bytes(size.StoredOriginals), other @AssetManager.Shared.Pages.Dashboard.Bytes(size.Other)
+        </MudText>
+    }
+    <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Compress" OnClick="CompactAsync" Class="mt-2" id="compact-catalog">Compact catalog</MudButton>
+
+    <MudText Typo="Typo.subtitle2" Class="mt-4">Open another catalog</MudText>
+    <MudText Typo="Typo.caption" Class="mud-text-secondary">A path to a file that does not exist creates a new, empty catalog there. A folder gets a new catalog.amdb in it.</MudText>
+    <MudStack Row="true" AlignItems="AlignItems.End" Spacing="2" Wrap="Wrap.Wrap">
+        <MudTextField @bind-Value="_path" Label="Catalog file" Placeholder="D:\Assets\catalog.amdb" Margin="Margin.Dense" Style="min-width: 420px; flex: 1"
+                      Immediate="true" id="catalog-new-path" />
+        <MudButton Variant="Variant.Text" StartIcon="@Icons.Material.Filled.FileOpen" OnClick="PickFileAsync">Browse</MudButton>
+        <MudButton Variant="Variant.Text" StartIcon="@Icons.Material.Filled.CreateNewFolder" OnClick="PickFolderAsync">New in folder</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SwitchAsync" Disabled="string.IsNullOrWhiteSpace(_path) || _switching" id="catalog-open">Open</MudButton>
+    </MudStack>
+</MudPaper>
+
+@code {
+    private CatalogSize? _size;
+    private string? _path;
+    private bool _switching;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Catalog.ContentChanged += OnChanged;
+        Catalog.Opened += OnChanged;
+        await LoadSizeAsync();
+    }
+
+    private async Task LoadSizeAsync()
+    {
+        try
+        {
+            _size = (await Stats.GetAsync()).Size;
+        }
+        catch (InvalidOperationException) { _size = null; }
+    }
+
+    private void OnChanged() => InvokeAsync(async () =>
+    {
+        await LoadSizeAsync();
+        StateHasChanged();
+    });
+
+    private async Task PickFileAsync()
+    {
+        var picked = await Ui.RunAsync(() => Files.PickFilesAsync(multiple: false));
+        if (picked is { Count: > 0 }) _path = picked[0];
+    }
+
+    private async Task PickFolderAsync()
+    {
+        var folder = await Ui.RunAsync(() => Folders.PickFolderAsync());
+        if (folder is not null) _path = CatalogLocationService.NewCatalogPath(folder);
+    }
+
+    private async Task SwitchAsync()
+    {
+        _switching = true;
+        try
+        {
+            var created = false;
+            if (await Ui.RunAsync(async () => created = await Location.SwitchAsync(_path!)))
+            {
+                _path = null;
+                Snackbar.Add(created ? "Created and opened a new, empty catalog." : "Catalog opened.", Severity.Success);
+            }
+        }
+        finally
+        {
+            _switching = false;
+        }
+    }
+
+    private Task CompactAsync() => Ui.RunAsync(() => Jobs.EnqueueAsync(JobTypes.Compact, "Compact catalog", new { }), "Compacting the catalog…");
+
+    public void Dispose()
+    {
+        Catalog.ContentChanged -= OnChanged;
+        Catalog.Opened -= OnChanged;
+    }
+}

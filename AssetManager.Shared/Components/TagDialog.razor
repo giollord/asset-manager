@@ -1,0 +1,78 @@
+@using AssetManager.Data.Services
+
+@* Picks tags for a bulk tag or untag. Returns the chosen tag names (List<string>). *@
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-2">@Message</MudText>
+        @if (AllowNew)
+        {
+            <MudAutocomplete T="string" Label="Tag" SearchFunc="FindAsync" ValueChanged="Add" Margin="Margin.Dense" Dense="true" AutoFocus="true"
+                             ResetValueOnEmptyText="true" CoerceText="false" CoerceValue="true" Class="tag-dialog-input" />
+        }
+        <div class="mt-2" id="tag-dialog-choices">
+            @if (AllowNew)
+            {
+                @foreach (var tag in _chosen)
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Primary" Text="@tag" OnClose="_ => _chosen.Remove(tag)" />
+                }
+            }
+            else
+            {
+                @foreach (var t in Existing)
+                {
+                    <MudChip T="string" Size="Size.Small" Color="@(_chosen.Contains(t.Name) ? Color.Error : Color.Default)" OnClick="() => Toggle(t.Name)"
+                             Class="tag-choice" data-tag="@t.Name">
+                        @t.Name (@t.Count.ToString("N0"))
+                    </MudChip>
+                }
+                @if (Existing.Count == 0)
+                {
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary">The selected assets have no tags.</MudText>
+                }
+            }
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="() => Dialog.Cancel()">Cancel</MudButton>
+        <MudButton Color="@(AllowNew ? Color.Primary : Color.Error)" Variant="Variant.Filled" Disabled="_chosen.Count == 0"
+                   OnClick="() => Dialog.Close(DialogResult.Ok(_chosen.ToList()))" Class="tag-dialog-ok">@ConfirmText</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] public IMudDialogInstance Dialog { get; set; } = null!;
+
+    [Parameter] public string Message { get; set; } = "";
+
+    [Parameter] public string ConfirmText { get; set; } = "OK";
+
+    /// <summary>True: type any tag (bulk tag). False: pick from <see cref="Existing"/> (bulk untag).</summary>
+    [Parameter] public bool AllowNew { get; set; } = true;
+
+    /// <summary>Tags offered: autocomplete suggestions, or the tags to remove from.</summary>
+    [Parameter] public IReadOnlyList<TagUsage> Existing { get; set; } = [];
+
+    private readonly List<string> _chosen = [];
+
+    private void Add(string? tag)
+    {
+        if (string.IsNullOrWhiteSpace(tag)) return;
+        tag = TagService.Normalize(tag);
+        if (!_chosen.Contains(tag)) _chosen.Add(tag);
+    }
+
+    private void Toggle(string tag)
+    {
+        if (!_chosen.Remove(tag)) _chosen.Add(tag);
+    }
+
+    private Task<IEnumerable<string>> FindAsync(string? text, CancellationToken ct)
+    {
+        var names = Existing.Select(t => t.Name);
+        IEnumerable<string> found = string.IsNullOrWhiteSpace(text) ? names : names.Where(t => t.Contains(text.Trim(), StringComparison.OrdinalIgnoreCase));
+        found = found.Take(30).ToList();
+        if (!string.IsNullOrWhiteSpace(text) && !found.Contains(TagService.Normalize(text))) found = found.Append(text.Trim());
+        return Task.FromResult(found);
+    }
+}
