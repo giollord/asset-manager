@@ -70,7 +70,7 @@ public sealed class ModelDownloader(IAppSettingsStore settings, HttpClient? http
         foreach (var file in package.Files)
         {
             var offset = before;
-            await DownloadAsync(file, new Progress<DownloadProgress>(p => progress?.Report(new DownloadProgress(file.Title, offset + p.Done, total))), ct);
+            await DownloadAsync(file, new InlineProgress(p => progress?.Report(new DownloadProgress(file.Title, offset + p.Done, total))), ct);
             before += file.Size;
         }
         settings.Update(s =>
@@ -212,4 +212,13 @@ public sealed class ModelInstalls(ModelDownloader downloader, ILogger<ModelInsta
         lock (_sync)
             if (_running.TryGetValue(package.Id, out var r)) r.Cts.Cancel();
     }
+}
+
+/// <summary>
+/// Passes each report on immediately, unlike <see cref="Progress{T}"/>, which posts it to the thread pool: the
+/// per-file reports then reach the caller in order, and the last one before the download returns.
+/// </summary>
+internal sealed class InlineProgress(Action<DownloadProgress> report) : IProgress<DownloadProgress>
+{
+    public void Report(DownloadProgress value) => report(value);
 }

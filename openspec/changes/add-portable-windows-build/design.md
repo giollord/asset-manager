@@ -80,3 +80,12 @@ The version also goes into the Serilog start line and into Settings → About, w
 - Settings files with absolute paths are read as before.
 - First release: merge, push tag `v0.1.0`, download the zip from the release, run it from a fresh folder.
 - Rollback: delete the release and tag. The workflow has no effect on the app's behaviour.
+
+## Implementation notes
+
+- The first Release publish and smoke test (start, import with AI on the GPU, previews of models, audio and textures, export, moving the folder) found one packaging gap: the llama.cpp release zips do not contain llama.cpp's own MIT license. It is now checked in from the pinned tag (`AssetManager.AI/licenses`) and copied to `llama/LICENSE.txt`. The workflow's content check requires it.
+- The settings file always sits in the data folder, so relative paths are resolved against the folder that holds `settings.json`. That is the same root in the app and also works when a settings path is passed in explicitly. A missing settings file is written with the defaults on first start, so a new data folder shows it at once.
+- The test assembly sets its own data root (a module initializer), so tests never write into the developer's real data folder.
+- Two intermittent test failures, which would have made CI unreliable, came from real bugs and were fixed in the code, not by skipping:
+  - A Unity package cut short could read without error and lose its last entries. The reader now decompresses through a counting stream, using `System.Formats.Tar`, and compares the result with the gzip trailer's size. Real packages from `E:\Assets` give the same entry counts as before.
+  - Model download progress went through `Progress<T>`, which delivers reports later on the thread pool, so the final report could arrive after the download returned. Reports are now passed on synchronously.

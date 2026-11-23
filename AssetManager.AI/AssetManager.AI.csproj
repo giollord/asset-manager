@@ -54,6 +54,8 @@
     <ItemGroup>
       <_LlamaOut Include="$(LlamaDir)**/*" />
       <None Include="@(_LlamaOut)" Link="llama/%(_LlamaOut.RecursiveDir)%(_LlamaOut.Filename)%(_LlamaOut.Extension)" CopyToOutputDirectory="PreserveNewest" />
+      <!-- The release zips carry only third-party licenses; llama.cpp's own MIT license is checked in (from the same tag). -->
+      <None Include="$(MSBuildThisFileDirectory)licenses/llama.cpp.LICENSE.txt" Link="llama/LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
     </ItemGroup>
   </Target>
 

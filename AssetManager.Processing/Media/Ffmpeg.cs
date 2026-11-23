@@ -65,7 +65,7 @@ public static class Ffmpeg
 
     public sealed class TempFolder : IDisposable
     {
-        public string Path { get; } = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "AssetManager", "ffmpeg", Guid.NewGuid().ToString("N"));
+        public string Path { get; } = System.IO.Path.Combine(AssetManager.Core.Settings.AppPaths.Temp, "ffmpeg", Guid.NewGuid().ToString("N"));
 
         public TempFolder() => Directory.CreateDirectory(Path);
 

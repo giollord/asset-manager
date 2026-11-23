@@ -47,7 +47,7 @@ public sealed class AssetExporter(CatalogStore catalog, ILocationResolver resolv
     private readonly ILogger _log = logger ?? (ILogger)NullLogger.Instance;
 
     /// <summary>Root of the temporary folders that clipboard copies are written to.</summary>
-    public string TempRoot { get; init; } = Path.Combine(Path.GetTempPath(), "AssetManager", "export");
+    public string TempRoot { get; init; } = AssetManager.Core.Settings.AppPaths.Export;
 
     /// <summary>Plans an extraction: target paths and the ones that conflict. Reads only the catalog.</summary>
     public async Task<ExportPlan> PlanAsync(IReadOnlyCollection<long> assetIds, string targetFolder, bool preserveStructure, CancellationToken ct = default)

@@ -50,12 +50,18 @@ public class UnityPackageAndVfsTests
         Assert.Equal(2, contents.Entries.Count);
     }
 
-    [Fact]
-    public async Task Corrupt_package_is_an_error()
+    [Theory]
+    [InlineData(0.3)]
+    [InlineData(0.5)]
+    [InlineData(0.7)]
+    [InlineData(0.9)]
+    [InlineData(0.99)]
+    public async Task Truncated_package_is_an_error(double keep)
     {
+        // A cut can land where the reader sees a clean end of the tar; the gzip size check must still catch it.
         using var kit = new ProcessingKit();
         var bytes = Package();
-        var path = kit.Dir.Write("broken.unitypackage", bytes[..(bytes.Length / 2)]);
+        var path = kit.Dir.Write("broken.unitypackage", bytes[..(int)(bytes.Length * keep)]);
         await Assert.ThrowsAsync<ContainerReadException>(() => kit.Packages.OpenAsync(path));
     }
 

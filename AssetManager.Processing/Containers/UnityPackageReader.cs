@@ -65,13 +65,65 @@ public sealed class UnityPackageReader(ExtractionCache cache) : IContainerReader
         return new ResolvedFile(hit.LocalPath, ResolvedFrom.Container, contents);
     }
 
+    /// <summary>
+    /// Extracts the tar inside a gzip package and checks that the gzip stream was complete: a package cut short (an
+    /// interrupted copy or download) can otherwise read without error, with the last entries silently missing. The
+    /// gzip trailer stores the uncompressed size (mod 2^32), which must match what was decompressed.
+    /// </summary>
+    private static void ExtractCheckedGzipTar(string path, string dest, CancellationToken ct)
+    {
+        using var file = File.OpenRead(path);
+        using var gzip = new System.IO.Compression.GZipStream(file, System.IO.Compression.CompressionMode.Decompress, leaveOpen: true);
+        using var counted = new CountingStream(gzip);
+        using (var tar = new System.Formats.Tar.TarReader(counted, leaveOpen: true))
+        {
+            while (tar.GetNextEntry() is { } entry)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (entry.EntryType is not (System.Formats.Tar.TarEntryType.RegularFile or System.Formats.Tar.TarEntryType.V7RegularFile)
+                    || entry.DataStream is null) continue;
+                if (EntryPaths.Normalize(entry.Name) is not { } key) continue;
+                var target = EntryPaths.ToLocal(dest, key);
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                using (var output = File.Create(target)) entry.DataStream.CopyTo(output);
+                if (entry.ModificationTime.Year > 1980) File.SetLastWriteTimeUtc(target, entry.ModificationTime.UtcDateTime);
+            }
+        }
+        counted.CopyTo(Stream.Null); // the tar end blocks and padding
+        Span<byte> trailer = stackalloc byte[4];
+        file.Seek(-4, SeekOrigin.End);
+        file.ReadExactly(trailer);
+        if (System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(trailer) != (uint)counted.Count)
+            throw new ContainerReadException("Corrupt or unsupported Unity package: the file is incomplete (truncated).");
+    }
+
+    /// <summary>Counts the bytes read through a read-only stream.</summary>
+    private sealed class CountingStream(Stream inner) : Stream
+    {
+        public long Count { get; private set; }
+        public override int Read(byte[] buffer, int offset, int count) => Add(inner.Read(buffer, offset, count));
+        public override int Read(Span<byte> buffer) => Add(inner.Read(buffer));
+        private int Add(int n) { Count += n; return n; }
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => Count; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
     private static void Extract(string path, string dir, CancellationToken ct)
     {
         var raw = Path.Combine(dir, "raw");
         try
         {
-            using (var reader = ReaderFactory.OpenReader(path, new ReaderOptions()))
-                ArchiveIo.ExtractReader(reader, raw, null, ct);
+            if (ArchiveIo.IsGzip(path)) ExtractCheckedGzipTar(path, raw, ct);
+            else
+                using (var reader = ReaderFactory.OpenReader(path, new ReaderOptions()))
+                    ArchiveIo.ExtractReader(reader, raw, null, ct);
         }
         catch (Exception e) when (e is not (ContainerReadException or OperationCanceledException))
         {

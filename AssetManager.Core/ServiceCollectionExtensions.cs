@@ -10,6 +10,7 @@ public static class CoreServiceCollectionExtensions
     public static IServiceCollection AddAssetManagerCore(this IServiceCollection services, string? settingsPath = null)
     {
         services.TryAddSingleton<IAppSettingsStore>(_ => new JsonAppSettingsStore(settingsPath));
+        services.TryAddSingleton(_ => AppPaths.Location);
         services.TryAddSingleton<AppStartup>();
         services.TryAddSingleton<Platform.FileDropBroker>();
         return services;

@@ -1,0 +1,115 @@
+# Builds and tests the app on every push and pull request to master, and packages the portable Windows build.
+# A version tag (v1.2.3) also publishes a GitHub Release with the portable zip (spec "app-distribution").
+name: Build
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*.*.*']
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Build, test and package
+    runs-on: windows-latest
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      zip: ${{ steps.version.outputs.zip }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET (SDK from global.json)
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Install the MAUI Windows workload
+        run: dotnet workload install maui-windows
+
+      # llama.cpp and FFmpeg are downloaded by the build (SHA-256 pinned in the csproj files); keep them between runs.
+      - name: Cache native binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            AssetManager.AI/native/llama
+            AssetManager.Processing/native/ffmpeg
+          key: native-${{ hashFiles('AssetManager.AI/AssetManager.AI.csproj', 'AssetManager.Processing/AssetManager.Processing.csproj') }}
+
+      - name: Version
+        id: version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $version = $env:GITHUB_REF_NAME.TrimStart('v')
+            if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Tag '$env:GITHUB_REF_NAME' is not a version like v1.2.3." }
+            $label = $version
+          } else {
+            $version = '0.0.0'
+            $label = "0.0.0-$($env:GITHUB_SHA.Substring(0, 7))"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "zip=AssetManager-$label-win-x64-portable.zip" >> $env:GITHUB_OUTPUT
+
+      # Tests that need real AI models or sample assets skip themselves when their environment variables are unset.
+      - name: Test
+        run: dotnet test --project AssetManager.Tests/AssetManager.Tests.csproj
+
+      - name: Publish portable build
+        shell: pwsh
+        run: >
+          dotnet publish AssetManager/AssetManager.csproj -c Release -f net10.0-windows10.0.19041.0
+          -p:Portable=true
+          -p:Version=${{ steps.version.outputs.version }}
+          -p:ApplicationDisplayVersion=${{ steps.version.outputs.version }}
+          -o publish/AssetManager
+
+      - name: Check package contents
+        shell: pwsh
+        run: |
+          $root = 'publish/AssetManager'
+          $required = 'AssetManager.exe', 'portable', 'llama/LICENSE.txt', 'llama/vulkan/llama-server.exe', 'llama/cpu/llama-server.exe',
+                      'ffmpeg/ffmpeg.exe', 'ffmpeg/ffprobe.exe', 'ffmpeg/FFMPEG.LICENSE.txt'
+          $missing = $required | Where-Object { -not (Test-Path (Join-Path $root $_)) }
+          if ($missing) { throw "Missing from the package: $($missing -join ', ')" }
+          $models = Get-ChildItem $root -Recurse -Filter *.gguf
+          if ($models) { throw "The package must not contain models: $($models.Name -join ', ')" }
+
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path publish/AssetManager -DestinationPath '${{ steps.version.outputs.zip }}'
+
+      - name: Upload portable zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: portable-win-x64
+          path: ${{ steps.version.outputs.zip }}
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: portable-win-x64
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "$GITHUB_REF_NAME" "${{ needs.build.outputs.zip }}"
+          --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
