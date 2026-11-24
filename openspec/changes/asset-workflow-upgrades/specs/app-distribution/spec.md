@@ -17,3 +17,10 @@ When a newer version exists, About SHALL show it, and the app SHALL show one not
 #### Scenario: Offline
 - **WHEN** the update check is on and there is no network
 - **THEN** no error is shown, and About says the last check failed
+
+### Requirement: Screenshots in the README
+The README SHALL show a few screenshots of the app below its introduction and above "Download": at least the Browse grid, the asset details with a 3D model, and the Dashboard. The screenshots SHALL be PNG files kept in the repository under `docs/screenshots/` and referenced by relative path, each with alt text. They SHALL show the current UI, and SHALL only show assets whose licenses allow redistribution (for example CC0 packs). The logo SHALL stay at the top of the README.
+
+#### Scenario: README on GitHub
+- **WHEN** someone opens the repository page on GitHub
+- **THEN** the README shows the logo, then the introduction, then the screenshots, all rendered from files in the repository

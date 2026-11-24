@@ -114,9 +114,24 @@
 
 - [ ] 17.1 Implement `UpdateChecker` (GitHub latest-release request with a plain User-Agent, a 10 s timeout, version comparison, the 24 h throttle, and `LastSeenVersion`/`LastCheckFailed` in `AppSettings`, skipped in Debug), and the About UI (toggle, "Check now", "x.y.z available" link, "last check failed" note) with one notification per new version. Verify with unit tests using a fake `HttpMessageHandler` for "Newer release", "Offline" and "Default off" (no request made), and bUnit tests for About. Update the README to name the update check as the only optional network use besides model downloads.
 
-## 18. Integration check
+## 18. Whole-card selection
 
-- [ ] 18.1 Run the full test suite, including the gated real-model and samples tests when available. Then import a representative subset of `ASSETMANAGER_SAMPLES` containing a pixel-art pack with sprite sheets, a low-poly pack and a `.unitypackage` with sliced sprites. Verify:
+- [ ] 18.1 Move the click and double-click handlers in `AssetCard` from the preview `div` to the root `MudPaper`, stop propagation on the checkbox, drop `selectable` from `asset-card-name`, and add `.asset-card { user-select: none; }` in `app.css` (D16). Verify with bUnit tests in `AssetCardTests`/`BrowseTests`: a click on the name selects only that card ("Click on the name"), Ctrl-click on the type line adds to the selection, a double click on the name opens the details, and a checkbox click toggles without also selecting-only. Verify by hand with `tools/cdp.mjs` that double-clicking a card name highlights no text, while the name in the details drawer can still be selected and copied.
+
+## 19. Card context menu
+
+- [ ] 19.1 Add `AssetContextMenu` (one instance on Browse, `MudPopover` at the pointer or card position, items with icons: Open details, Find similar, Copy name) and `@oncontextmenu:preventDefault` on `AssetCard` via a new `OnContextMenu` parameter. Remove the find-similar button from `Browse.Overlay`, leaving only play. Implement Copy name with `navigator.clipboard.writeText` in `browse.js` plus a snackbar, and the disabled state with its reason for Find similar (D17). Verify with bUnit tests for "Find similar from the menu", "Not enriched yet" and "Menu on an unselected card" (selection unchanged), and by hand that "Copy name" puts the text on the clipboard in the MAUI app and that the WebView's default menu no longer appears on cards.
+- [ ] 19.2 Map the `ContextMenu` key and Shift+F10 on the focused card to the menu in the `browse.js` keyboard handler from 4.1, focusing the first item, and add both to the `?` dialog and the README shortcut table. Verify by hand with `tools/cdp.mjs` (scenario "Keyboard").
+
+## 20. Turntable of stored renders
+
+- [ ] 20.1 Add `PreviewQueries.ModelTurntableAsync` returning rings, azimuths, primary index and the views, with the one-ring fallback when the stored views do not match the current `PreviewOptions` (D18). Verify with data tests: 24 stored views with default settings give 3 × 8 and the primary index; 16 views after the settings changed to 3 × 8 give 1 × 16.
+- [ ] 20.2 Implement `ModelTurntable.razor` and `turntable.js` (preloaded images, pointer-capture drag with azimuth wrap and clamped ring steps, arrow keys, grab cursor). Check the azimuth order in `ModelRendering` and set the drag direction so the model turns with the pointer. Verify with a bUnit test that the component renders all views and starts at the primary one, and by hand with the scenarios "Turn a model offline" and "Tilt".
+- [ ] 20.3 Use `ModelTurntable` in the details drawer's "Renders" mode for models, replacing the single image and the `#details-views` strip, and in `ModelViewer` as the fallback on `OriginalUnavailableException` with the "Original not available" note. Verify with bUnit tests for the drawer (no `#details-views` for a model; the turntable is present) and for `ModelViewer` with a fake `OriginalUnavailableException` (scenario "View model with the drive detached"), and by hand in the MAUI app with a model whose drive is detached, both in the drawer and in the "Open original" dialog.
+
+## 21. Integration check
+
+- [ ] 21.1 Run the full test suite, including the gated real-model and samples tests when available. Then import a representative subset of `ASSETMANAGER_SAMPLES` containing a pixel-art pack with sprite sheets, a low-poly pack and a `.unitypackage` with sliced sprites. Verify:
   - the sheets and grids are right
   - consensus added the expected source tags
   - image search finds the related assets
@@ -124,6 +139,11 @@
   - a backup and restore round trip works
 
   Record the tuned thresholds in design.md "Open Questions".
+
+## 22. README screenshots
+
+- [ ] 22.1 Build a screenshot catalog from CC0 packs only in a separate data folder, run the Debug MAUI app at 1440×900 in the dark theme, and capture `docs/screenshots/browse.png`, `details-model.png` (a model with the turntable or the 3D view), `dashboard.png` and `import-review.png` with `node tools/cdp.mjs shot` (D19). Optimize the PNGs (each under ~400 KB) and check them by eye: no personal paths, drive letters or non-redistributable art.
+- [ ] 22.2 Add a "Screenshots" block to the README after the intro and before "Download", Browse full-width and the other three below it, each with alt text; leave the logo line unchanged. Verify that the README renders with the images in a Markdown preview and on the branch's GitHub page (scenario "README on GitHub").
 
 ## Workflow follow-up
 

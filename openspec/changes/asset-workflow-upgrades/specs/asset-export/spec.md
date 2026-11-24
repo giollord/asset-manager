@@ -54,3 +54,20 @@ In a credits report, assets whose license is unknown SHALL be listed first under
 #### Scenario: Credits for a collection
 - **WHEN** the user exports Markdown credits for a collection with assets from 3 sources, one of which has an unknown license
 - **THEN** the file starts with a warning listing the source with the unknown license, followed by one section per source with its license, attribution text and links
+
+## MODIFIED Requirements
+
+### Requirement: Open original
+The user SHALL be able to open an asset's original. Images, audio and 3D models SHALL open in an in-app viewer: the 3D viewer is interactive and can orbit, and audio plays at full length. When a 3D model's original is not available and not stored in the catalog, the in-app 3D viewer SHALL show the model's stored renders as a turntable (see asset-search "Inline audio and model inspection") with a note that the original is unavailable, instead of only an error. The user SHALL also be able to open the original in the operating system's default application, or reveal it in the file explorer when it is a plain file on disk. Originals inside containers SHALL be extracted to the temporary cache first.
+
+#### Scenario: View model in app
+- **WHEN** the user opens a 3D model asset whose original is available
+- **THEN** an interactive textured 3D view of the full model is shown
+
+#### Scenario: View model with the drive detached
+- **WHEN** the user opens the 3D view of a model whose drive is detached and which is not stored in the catalog
+- **THEN** the turntable of its stored renders is shown with a note that the original is not available, and dragging turns it
+
+#### Scenario: Open archived file externally
+- **WHEN** the user opens externally a texture that lives inside a zip
+- **THEN** the texture is extracted to the cache and opened with the default application

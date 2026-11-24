@@ -175,6 +175,34 @@ On the web host, `UnsupportedPlatformServices` returns "not supported", and the 
 - **Rejected:** a hard closed vocabulary. It would lose specific tags like "barrel" or "forest" that make search useful.
 - **Rejected:** per-type vocabularies. A single generic list is enough, and the AI already sees the type.
 
+### D16. Whole-card click and no card text selection
+- **Today:** `AssetCard` puts `@onclick`/`@ondblclick` only on the preview `div`. The name line has the `selectable` class (app.css opts it into `user-select: text`), so clicking it does nothing and dragging highlights it.
+- **Change:** move the click and double-click handlers to the card's root `MudPaper`. The checkbox and the overlay already stop propagation (the overlay `div` has `@onclick:stopPropagation`); the checkbox gets the same treatment so a checkbox click is not also a card click. Drop the `selectable` class from `asset-card-name` and add `.asset-card { user-select: none; }` so badges and the type line can never opt back in. The details drawer keeps `selectable` on its name, which already satisfies "Copy an asset name".
+- `AssetCard` is shared with the import review grid, so that grid gets the same whole-card behaviour, which is wanted there too.
+
+### D17. Card context menu
+- **Trigger:** `@oncontextmenu` with `:preventDefault` on the card root (this also suppresses WebView2's default menu there only). The keyboard handler from D10 maps `ContextMenu` and Shift+F10 on the focused card to the same call, anchored at the card's bounding box.
+- **Component:** one `AssetContextMenu` instance on the Browse page, not one per card (the grid is virtualized and can hold hundreds of cards). It is a `MudPopover` positioned at the pointer (or card) coordinates, holding a `MudList`/`MudMenuItem`-style list with `Icon` on every item: `OpenInNew` "Open details", `ImageSearch` "Find similar", `ContentCopy` "Copy name". It closes on Esc, outside click, scroll and item choice.
+- **Find similar:** same action as the removed overlay button (`SetQuery(new SearchQuery { SimilarTo = id })`). It is enabled when `AiStatus == Enriched` and `CatalogSearch.SemanticAvailable`; otherwise disabled with the reason as secondary text ("Needs AI enrichment" / "Needs the embedding model").
+- **Copy name:** `navigator.clipboard.writeText` from `browse.js` (both hosts serve over a secure origin, so the async clipboard API is available), followed by a "Copied" snackbar. No new platform service is needed; `IClipboardFileService` stays files-only.
+- **Selection:** the menu takes the asset id it was opened for and never touches `_selected`. Bulk actions stay in the `BulkActionBar`.
+- `Overlay(a)` keeps only the audio play button.
+
+### D18. Turntable of stored renders
+- **Data:** `PreviewQueries.ModelViewsAsync` already returns `ModelView` rows ordered by `Index`, where `Index = ring * azimuths + azimuth` (`PreviewKind` doc). It drops the index, so a new `ModelTurntableAsync(assetId)` returns `{ Rings, Azimuths, Primary, Views[] }`: `Rings`/`Azimuths` come from the current `PreviewOptions` when the stored count equals `ViewCount` and the indices are dense; otherwise one ring of all views (spec scenario "Renders from older settings"). `Primary` is `PrimaryViewIndex` clamped to the range. Animations keep their single animated preview and do not use the turntable.
+- **Component:** `ModelTurntable.razor` + `turntable.js`. The .NET side passes the data URLs once; JS creates all `<img>` elements up front (hidden, decoded via `img.decode()`) and toggles visibility, so a step is a class change with no reload or Blazor round trip.
+- **Drag mapping:** pointer capture on `pointerdown`. Horizontal: one azimuth step per `width / azimuths` px, so a drag across the full width is one turn; the step direction is chosen so the model turns with the pointer (checked against `ModelRendering`'s azimuth order during implementation). Vertical: one ring step per `height / (rings + 1)` px, clamped. Arrow keys step by one when the element has focus. Cursor `grab`/`grabbing`; `touch-action: none`.
+- **Where it is used:**
+  - details drawer, "Renders" mode: replaces the single `<img>` and the `#details-views` thumbnail strip for models
+  - `ModelViewer`: on `OriginalUnavailableException` it renders `ModelTurntable` with a small "Original not available — showing stored renders" note instead of the error text. This covers both the drawer's "3D view" and the `OriginalViewer` dialog, which reuses `ModelViewer`.
+- **Orientation edits:** while the user changes the rotation in the drawer, the live `ModelViewer` is shown as today; with the drive detached the existing message about re-rendering applies, since the stored renders do not reflect an unsaved rotation.
+- **Rejected:** interpolating or cross-fading between renders. It blurs pixel-exact renders and does not make 8 azimuths look smoother; the "bad fps" look is intended.
+
+### D19. README screenshots
+- Captured from the Debug MAUI app with `node tools/cdp.mjs shot` (WebView2 content at a fixed 1440×900 window), dark theme, over a catalog built only from CC0 packs (e.g. Kenney) from the sample library, so the images can be redistributed with the repository.
+- Files: `docs/screenshots/browse.png`, `details-model.png`, `dashboard.png`, `import-review.png`, optimized PNGs under ~400 KB each. The README gets a "Screenshots" block right after the intro paragraphs: the Browse shot full-width, the other three smaller below it, each with alt text. The logo line stays as it is.
+- Taken after the Browse and viewer changes above, so they show the final UI.
+
 ### D14. Migration and order of work
 One EF migration (`AddWorkflowFeatures`) covers:
 - `Favorite`, `Rating` and `Notes`
@@ -194,6 +222,8 @@ One EF migration (`AddWorkflowFeatures`) covers:
 - **Unity GUID conflicts** if the user continues past the warning. → Mitigation: an explicit warning listing the files, with "skip" as the default.
 - **Backups of large catalogs** (previews are stored inside) take time and disk space. → Mitigation: a background job, a free-space check, retention, and a size shown in Settings.
 - **One large change.** → Mitigation: the task groups are independent after the shared migration (group 2), so they can be implemented and verified one feature at a time.
+- **Whole-card clicks could swallow clicks meant for controls on the card** (checkbox, play). → Mitigation: those controls stop propagation, covered by bUnit tests.
+- **Turntable with few azimuths looks jumpy.** → Accepted: it is a fallback for detached drives; the default 8 azimuths give 45° steps, and more can be set in preview settings.
 - **The update check uses the network.** → Mitigation: off by default, no identifiers sent, and the app-shell "Fully offline" requirement is updated to state the exception.
 
 ## Migration Plan

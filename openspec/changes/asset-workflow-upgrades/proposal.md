@@ -48,6 +48,14 @@ The AI also tags each asset on its own. When most of a pack is clearly "pixel ar
   - restore from Settings, which keeps a copy of the current catalog first
 - **Update check:** an opt-in check of GitHub Releases. It is off by default and is the only other network access besides model downloads. About shows when a newer version exists and links to its release page. Nothing is downloaded or installed.
 
+**Browse and viewer polish**
+- **Click anywhere on a tile:** today only the preview area of a Browse card reacts to clicks; the name and type line below it do nothing, and the name text gets highlighted when the user clicks or drags over it. A click anywhere on the card selects it (with Ctrl/Shift as today), and a double click anywhere opens it. Text on cards is no longer selectable. Text in the details panel stays selectable.
+- **Card context menu:** the "Find similar" icon button on the card's preview goes away. Right-clicking a card (or pressing the context-menu key or Shift+F10 on the focused card) opens a menu with icons: "Open details", "Find similar" and "Copy name".
+- **Turntable for stored renders:** when a model's original is not available (drive detached, not stored), the details panel and the original viewer show its stored multi-angle renders as a turntable: dragging left and right turns the model through the azimuths, dragging up and down moves between elevation rings. It looks like a 3D view at a very low frame rate, instead of an image with a strip of thumbnails.
+
+**README**
+- A few screenshots of the app (Browse, asset details, Dashboard, import review) in the README, under the intro. The logo at the top of the README stays as it is.
+
 ## Capabilities
 
 ### New Capabilities
@@ -58,11 +66,11 @@ The AI also tags each asset on its own. When most of a pack is clearly "pixel ar
 ### Modified Capabilities
 - `asset-catalog`: source-level tags and the "source" tag origin; favourite, rating and notes on assets.
 - `ai-enrichment`: tag consensus across a source; suggested tag vocabulary; sprite sheet and pixel-art hints in item output.
-- `asset-search`: search by image; filters for favourites, minimum rating and notes.
-- `asset-export`: drag out, Unity-aware export with `.meta` files and dependencies, credits report.
+- `asset-search`: search by image; filters for favourites, minimum rating and notes; "find similar" moves to the card context menu; turntable inspection of stored model renders.
+- `asset-export`: drag out, Unity-aware export with `.meta` files and dependencies, credits report; the original viewer falls back to the turntable when a model's original is unavailable.
 - `catalog-stats`: license audit view.
-- `app-shell`: keyboard navigation; the "fully offline" rule allows the opt-in update check.
-- `app-distribution`: update check against GitHub Releases.
+- `app-shell`: keyboard navigation; the "fully offline" rule allows the opt-in update check; whole-card click selection; card text not selectable; card context menu.
+- `app-distribution`: update check against GitHub Releases; screenshots in the README.
 
 ## Impact
 
@@ -82,6 +90,8 @@ The AI also tags each asset on its own. When most of a pack is clearly "pixel ar
   - Dashboard (audit tiles)
   - Settings (backup, library folders, consensus thresholds, update check)
   - Export dialog (Unity options), credits export
+  - `AssetCard` (whole-card click, no text selection, context menu) and a new turntable viewer used by the details drawer and `ModelViewer`
+- **Docs:** README screenshots in `docs/screenshots/`.
 - **Platform:** native OLE drag-and-drop from the MAUI Windows window, Unsupported on the web dev host.
 - **Network:** one optional HTTPS GET to the GitHub API, only when the user turns it on.
 - **Specs:** several existing specs change, as listed above.
