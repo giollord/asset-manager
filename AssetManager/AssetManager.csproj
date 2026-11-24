@@ -21,10 +21,18 @@
     <MauiXamlInflator>SourceGen</MauiXamlInflator>
 
     <!-- Display name -->
-    <ApplicationTitle>AssetManager</ApplicationTitle>
+    <ApplicationTitle>Asset Manager</ApplicationTitle>
 
     <!-- App Identifier -->
-    <ApplicationId>com.companyname.assetmanager</ApplicationId>
+    <ApplicationId>io.github.giollord.assetmanager</ApplicationId>
+
+    <!-- File metadata shown in the exe's Properties -> Details (spec "App identity") -->
+    <Product>Asset Manager</Product>
+    <AssemblyTitle>Asset Manager</AssemblyTitle>
+    <Company>Daniil Barkov</Company>
+    <Authors>Daniil Barkov</Authors>
+    <Copyright>Copyright (c) 2026 Daniil Barkov</Copyright>
+    <Description>Offline catalog for game assets</Description>
 
     <!-- Versions -->
     <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
@@ -39,14 +47,14 @@
 
   <ItemGroup>
     <!-- App Icon -->
-    <MauiIcon Include="Resources\AppIcon\appicon.svg" ForegroundFile="Resources\AppIcon\appiconfg.svg" Color="#512BD4" />
+    <!-- The logo itself with no background layer, so the icon is transparent around the drawing -->
+    <MauiIcon Include="Resources\AppIcon\appicon.svg" />
 
     <!-- Splash Screen -->
-    <MauiSplashScreen Include="Resources\Splash\splash.svg" Color="#512BD4" BaseSize="128,128" />
+    <MauiSplashScreen Include="Resources\Splash\splash.svg" Color="#1E2A33" BaseSize="128,128" />
 
     <!-- Images -->
     <MauiImage Include="Resources\Images\*" />
-    <MauiImage Update="Resources\Images\dotnet_bot.svg" BaseSize="168,208" />
 
     <!-- Custom Fonts -->
     <MauiFont Include="Resources\Fonts\*" />
@@ -72,6 +80,11 @@
 
   <ItemGroup Condition="'$(Portable)' == 'true'">
     <None Include="Packaging\portable" Link="portable" CopyToOutputDirectory="Never" CopyToPublishDirectory="Always" />
+  </ItemGroup>
+
+  <!-- The app's own MIT license, shipped next to the exe (spec "Portable Windows package"). -->
+  <ItemGroup>
+    <None Include="..\LICENSE" Link="LICENSE.txt" CopyToOutputDirectory="Never" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

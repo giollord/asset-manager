@@ -23,16 +23,23 @@ Besides the full group, there SHALL be a compact mark: the sci-fi crate alone, i
 
 ### Requirement: Logo in the app
 The app SHALL show its logo, and none of the template's images, in these places:
-- the Windows icon of `AssetManager.exe`, including the taskbar and the title bar
-- the splash screen
+- the Windows icon of `AssetManager.exe`, including the taskbar
+- the loading screen shown while the app starts (MAUI shows no splash screen for the unpackaged Windows build, so the page's own placeholder takes its place)
 - the favicon of the app's page in the desktop app and in the web dev host
 - the app bar, next to the title
 
-The icon and splash backgrounds SHALL use the logo's background colour instead of the MAUI template purple.
+The window title bar keeps MAUI's stock look with the text "Asset Manager" and no icon.
 
 #### Scenario: Built app
 - **WHEN** the portable package is built and `AssetManager.exe` is started
-- **THEN** File Explorer, the taskbar and the title bar show the logo icon, and the splash and app bar show the logo, not the .NET mark
+- **THEN** File Explorer and the taskbar show the logo icon, the window title reads "Asset Manager", and the loading screen and app bar show the logo, not the .NET mark
+
+### Requirement: Logo backgrounds
+The app icon SHALL have no background: it is transparent around the drawing. The splash and loading screen backgrounds SHALL use the logo's background colour instead of the MAUI template purple.
+
+#### Scenario: Taskbar icon
+- **WHEN** the app runs and its icon shows in the taskbar
+- **THEN** the logo is drawn on the taskbar itself, with no coloured square behind it
 
 ### Requirement: App bar logo in both themes
 The app bar logo SHALL remain clearly visible in both the dark and the light theme.

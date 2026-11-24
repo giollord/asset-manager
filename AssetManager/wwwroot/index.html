@@ -3,18 +3,23 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <title>AssetManager</title>
+    <title>Asset Manager</title>
     <base href="/" />
     <link rel="stylesheet" href="_content/AssetManager.Shared/lib/roboto/roboto.css" />
     <link rel="stylesheet" href="_content/MudBlazor/MudBlazor.min.css" />
     <link rel="stylesheet" href="_content/AssetManager.Shared/app.css" />
     <link rel="stylesheet" href="AssetManager.styles.css" />
-    <link rel="icon" href="data:,">
+    <link rel="icon" type="image/svg+xml" href="_content/AssetManager.Shared/logo-mark.svg" />
 </head>
 
 <body>
 
-    <div id="app">Loading...</div>
+    <!-- Loading screen until Blazor renders: MAUI shows no splash for the unpackaged Windows build. -->
+    <div id="app">
+        <div style="position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #1E2A33;">
+            <img src="logo.svg" width="192" height="192" alt="Asset Manager" />
+        </div>
+    </div>
 
     <div id="blazor-error-ui" data-nosnippet>
         <div class="mud-alert mud-alert-filled-error mud-elevation-0 pa-3">

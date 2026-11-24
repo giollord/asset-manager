@@ -1,3 +1,5 @@
+<p align="center"><img src="branding/logo.svg" width="160" alt="Asset Manager logo: a sci-fi crate and a metal trash bin with an old wooden barrel lying across them"></p>
+
 # Asset Manager
 
 [![Build](https://github.com/giollord/asset-manager/actions/workflows/build.yml/badge.svg)](https://github.com/giollord/asset-manager/actions/workflows/build.yml)
@@ -69,7 +71,7 @@ To use an existing catalog from a portable copy (for example the one in `%LOCALA
 [`.github/workflows/build.yml`](.github/workflows/build.yml) runs on GitHub Actions (`windows-latest`):
 
 - **Every push and pull request to `master`** (and manual runs from the Actions tab): run the test suite with the pinned SDK. A failing test fails the run. Nothing is packaged.
-- **A version tag** runs the tests, then builds the portable package (with the MAUI workload), checks its contents (the AI runtime and FFmpeg with their licenses, no `.gguf` models), and publishes a GitHub Release with `AssetManager-<version>-win-x64-portable.zip`. Nothing is released if a test or the package check fails:
+- **A version tag** runs the tests, then builds the portable package (with the MAUI workload), checks its contents (the app's `LICENSE.txt`, the AI runtime and FFmpeg with their licenses, no `.gguf` models), and publishes a GitHub Release with `AssetManager-<version>-win-x64-portable.zip`. Nothing is released if a test or the package check fails:
 
   ```powershell
   git tag v1.2.0
@@ -112,6 +114,8 @@ The UI is Blazor with MudBlazor, hosted in a .NET MAUI `BlazorWebView` (WebView2
 | `AssetManager.AI` | The `llama-server` host and model downloads, structured prompts (pack pass, item pass, orientation judgment, collection descriptions), embeddings, semantic search, and the AI queue. |
 | `AssetManager.Tests` | xUnit v3 and bUnit tests, with generated fixtures (zip, 7z, tar, Unity packages, FBX/OBJ scenes). |
 
+The logo masters are in `branding/`: `logo.svg` (the full group) and `logo-mark.svg` (the crate alone, used for favicons and the app bar). The app icon, splash, loading screen and favicon SVGs are copies of them, and `BrandingTests` fails when a copy drifts from its master.
+
 Main ideas (details in `design.md`):
 
 - **One catalog file.** Metadata, previews, settings, jobs and optional stored copies of originals live in one SQLite file. Originals stay where they are and are found by volume serial and relative path, so a drive that gets a new letter is still found.
@@ -145,3 +149,7 @@ It serves the same UI at `http://localhost:5022` and uses the same catalog and s
 | [Roboto](https://github.com/googlefonts/roboto-classic) font | — | SIL Open Font License 1.1 | Bundled under `AssetManager.Shared/wwwroot/lib/roboto`, so the UI needs no internet. |
 
 The AI models are not bundled. They are downloaded on request, and their licenses (the Gemma terms of use) apply to them.
+
+## License
+
+Asset Manager is released under the [MIT License](LICENSE). The portable package includes it as `LICENSE.txt` next to `AssetManager.exe`. Third-party components keep their own licenses; see [Bundled native binaries](#bundled-native-binaries).

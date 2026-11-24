@@ -94,7 +94,7 @@ jobs:
         shell: pwsh
         run: |
           $root = 'publish/AssetManager'
-          $required = 'AssetManager.exe', 'portable', 'llama/LICENSE.txt', 'llama/vulkan/llama-server.exe', 'llama/cpu/llama-server.exe',
+          $required = 'AssetManager.exe', 'portable', 'LICENSE.txt', 'llama/LICENSE.txt', 'llama/vulkan/llama-server.exe', 'llama/cpu/llama-server.exe',
                       'ffmpeg/ffmpeg.exe', 'ffmpeg/ffprobe.exe', 'ffmpeg/FFMPEG.LICENSE.txt'
           $missing = $required | Where-Object { -not (Test-Path (Join-Path $root $_)) }
           if ($missing) { throw "Missing from the package: $($missing -join ', ')" }
