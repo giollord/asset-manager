@@ -42,12 +42,12 @@
   - a release job with `contents: write`, gated on build and tests, that runs `gh release create` for `v*.*.*` tags.
 
   Verify that `actionlint` (or a YAML lint) passes locally.
-- [ ] 5.2 Make the test suite pass on a clean `windows-latest` runner, and package only for version tags (scope change from the user: pull requests and pushes run the tests only). Push a branch and read the run; fix tests that assume dev-machine state so they skip cleanly with a reason rather than fail. Verify that a pull-request run is green, runs only the `test` job, and produces no package.
+- [x] 5.2 Make the test suite pass on a clean `windows-latest` runner, and package only for version tags (scope change from the user: pull requests and pushes run the tests only). Push a branch and read the run; fix tests that assume dev-machine state so they skip cleanly with a reason rather than fail. Verify that a pull-request run is green, runs only the `test` job, and produces no package.
 - [x] 5.3 Document the CI and release process in README (what runs on push and pull requests, how to cut a release by pushing `vX.Y.Z`, where to download the zip) and add a build status badge. Verify the documented tag command matches the workflow trigger.
 
 ## 6. Release verification
 
-- [ ] 6.1 With the user's go-ahead, push tag `v0.1.0`. Verify that the GitHub Release `v0.1.0` exists with `AssetManager-0.1.0-win-x64-portable.zip`. Download it, extract it to a fresh folder, and check that Settings → About shows version 0.1.0 and Portable mode, and that a small import works.
+- [x] 6.1 With the user's go-ahead, push tag `v0.1.0`. Verify that the GitHub Release `v0.1.0` exists with `AssetManager-0.1.0-win-x64-portable.zip`. Download it, extract it to a fresh folder, and check that Settings → About shows version 0.1.0 and Portable mode, and that a small import works.
 
 ## Workflow follow-up
 
