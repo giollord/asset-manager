@@ -42,6 +42,27 @@ public class ModelDownloaderTests
         new(role, name, "https://example.invalid/" + name, name, payload.Length, sha ?? Convert.ToHexStringLower(SHA256.HashData(payload)));
 
     [Fact]
+    public async Task Downloaded_models_are_found_after_the_data_folder_moves()
+    {
+        // Spec "Relocatable settings": a portable copy moved to another folder or drive letter keeps its models.
+        var ct = TestContext.Current.CancellationToken;
+        using var dir = Fixtures.FixtureBuilder.TempDir();
+        var root = Path.Combine(dir.Path, "E", "AssetManager", "data");
+        var chat = Payload(200_000);
+        var settings = new JsonAppSettingsStore(Path.Combine(root, "settings.json"));
+        var downloader = new ModelDownloader(settings, new HttpClient(new MultiServer(new() { ["chat.gguf"] = chat }))) { Folder = Path.Combine(root, "models") };
+        await downloader.InstallAsync(new ModelPackage("p", "P", "", [FileFor(chat, ModelRole.Chat, "chat.gguf")]), null, ct);
+
+        var moved = Path.Combine(dir.Path, "F", "AssetManager", "data");
+        Directory.CreateDirectory(Path.GetDirectoryName(moved)!);
+        Directory.Move(root, moved);
+        var reloaded = new JsonAppSettingsStore(Path.Combine(moved, "settings.json")).Current;
+
+        Assert.Equal(Path.Combine(moved, "models", "chat.gguf"), reloaded.ChatModelPath);
+        Assert.Equal(chat, await File.ReadAllBytesAsync(reloaded.ChatModelPath!, ct));
+    }
+
+    [Fact]
     public async Task Downloads_verifies_reports_progress_and_updates_settings()
     {
         using var dir = Fixtures.FixtureBuilder.TempDir();
@@ -62,8 +83,7 @@ public class ModelDownloaderTests
         Assert.Equal(downloader.PathOf(package.Files[0]), settings.Current.ChatModelPath);
         Assert.Equal(downloader.PathOf(package.Files[1]), settings.Current.MmprojPath);
 
-        // Progress events are delivered asynchronously by Progress<T>; wait for the last one.
-        for (var i = 0; i < 50 && !progress.Reports.Any(r => r.Done == package.TotalSize); i++) await Task.Delay(20, TestContext.Current.CancellationToken);
+        // Reports are passed on synchronously: the final one has arrived when InstallAsync returns.
         Assert.Contains(progress.Reports, r => r.Done == package.TotalSize && r.Total == package.TotalSize);
         Assert.All(progress.Reports, r => Assert.InRange(r.Done, 0, package.TotalSize));
     }

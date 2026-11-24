@@ -9,6 +9,11 @@ public static class MauiProgram
 {
     public static MauiApp CreateMauiApp()
     {
+        // First: everything below (logs, settings, catalog, models, browser profile) lives in the data folder.
+        var location = AppDataLocation.Resolve(AppContext.BaseDirectory);
+        AppPaths.Use(location);
+        Environment.SetEnvironmentVariable("WEBVIEW2_USER_DATA_FOLDER", AppPaths.WebView);
+
         var builder = MauiApp.CreateBuilder();
         builder
             .UseMauiApp<App>()
@@ -25,7 +30,7 @@ public static class MauiProgram
             .MinimumLevel.Information()
 #endif
             .MinimumLevel.Override("Microsoft", Serilog.Events.LogEventLevel.Warning)
-            .WriteTo.File(Path.Combine(AppPaths.Root, "logs", "app-.log"), rollingInterval: RollingInterval.Day,
+            .WriteTo.File(Path.Combine(AppPaths.Logs, "app-.log"), rollingInterval: RollingInterval.Day,
                 retainedFileCountLimit: 7, shared: true)
             .CreateLogger();
         builder.Logging.AddSerilog(logger, dispose: true);
@@ -63,7 +68,8 @@ public static class MauiProgram
 #endif
 
         var app = builder.Build();
-        logger.Information("Asset Manager {Version} started", typeof(MauiProgram).Assembly.GetName().Version);
+        logger.Information("Asset Manager {Version} started; data folder {Root} ({Mode:l}{Reason:l})", AppVersion.Current,
+            location.Root, location.Mode.ToString(), location.Reason is null ? "" : ": " + location.Reason);
         return app;
     }
 }

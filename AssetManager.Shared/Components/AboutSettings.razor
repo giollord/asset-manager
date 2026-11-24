@@ -1,0 +1,46 @@
+@using AssetManager.Core.Platform
+@inject AppDataLocation Location
+@inject IShellService Shell
+@inject Services.UiActions Ui
+
+@* Version, portable or not, and where the app keeps its data (spec "Data folder shown in Settings"). *@
+<MudPaper Class="pa-4" Outlined="true" id="about-settings">
+    <MudText Typo="Typo.h6" Class="mb-2">About</MudText>
+    <MudSimpleTable Dense="true" Elevation="0" Style="max-width: 900px">
+        <tbody>
+            <tr><td style="width: 160px">Version</td><td id="about-version">@AppVersion.Current</td></tr>
+            <tr><td>Mode</td><td id="about-mode">@ModeText</td></tr>
+            <tr>
+                <td>Data folder</td>
+                <td>
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                        <MudText Typo="Typo.body2" Style="word-break: break-all" id="about-data-folder">@Location.Root</MudText>
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.FolderOpen" OnClick="OpenAsync" id="about-open-folder">Open folder</MudButton>
+                    </MudStack>
+                </td>
+            </tr>
+        </tbody>
+    </MudSimpleTable>
+    @if (Location.Mode == DataMode.Fallback)
+    {
+        <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2" id="about-fallback">
+            Portable storage was not possible, so the data is kept in your user profile. @Location.Reason
+        </MudAlert>
+    }
+</MudPaper>
+
+@code {
+    private string ModeText => Location.Mode switch
+    {
+        DataMode.Portable => "Portable: everything is kept in the data folder next to the app",
+        DataMode.Override => $"Custom data folder (set by {AppDataLocation.OverrideVariable})",
+        DataMode.Fallback => "Portable copy, data in the user profile",
+        _ => "Standard: data in your user profile",
+    };
+
+    private Task OpenAsync() => Ui.RunAsync(async () =>
+    {
+        Directory.CreateDirectory(Location.Root);
+        await Shell.OpenAsync(Location.Root);
+    });
+}

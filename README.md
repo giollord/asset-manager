@@ -1,17 +1,25 @@
 # Asset Manager
 
+[![Build](https://github.com/giollord/asset-manager/actions/workflows/build.yml/badge.svg)](https://github.com/giollord/asset-manager/actions/workflows/build.yml)
+
 A local, offline-first catalog for game assets on Windows: 3D models, animations, images, textures, sprite sheets, sounds, music, fonts, video and documents. It imports folders, archives (zip, 7z, rar, tar) and Unity packages, including containers nested inside one another, without unpacking them on disk. It renders previews, reads licenses and links from the files that come with a pack, and can describe and tag everything with a local AI model. Browsing, search and previews keep working when the external drives with the originals are detached.
 
-The specification and design live in [`openspec/changes/build-asset-manager`](openspec/changes/build-asset-manager): `proposal.md`, `design.md` (decisions D1–D11), the capability specs under `specs/`, and `tasks.md`.
+The specification lives in [`openspec/specs`](openspec/specs), one folder per capability. The original proposal, design (decisions D1–D11) and task list are archived in [`openspec/changes/archive/2026-11-24-build-asset-manager`](openspec/changes/archive/2026-11-24-build-asset-manager); later changes are under [`openspec/changes`](openspec/changes).
 
-## Requirements
+## Download
+
+Get `AssetManager-<version>-win-x64-portable.zip` from the [Releases](https://github.com/giollord/asset-manager/releases) page, extract it anywhere (a local folder, a USB stick, the external drive that holds your assets), and run `AssetManager.exe`. Nothing needs to be installed: the package includes .NET, the Windows App SDK, the AI runtime and FFmpeg; only the WebView2 runtime that ships with Windows 10 and 11 is used from the system. The app keeps all its data in the `data` folder next to it (see [Data folder](#data-folder)). The AI models are not included; download them in Settings → AI model.
+
+## Building from source
+
+### Requirements
 
 - Windows 10 version 2004 (build 19041) or later, x64.
-- .NET 10 SDK with the MAUI workload: `dotnet workload install maui-windows`.
+- .NET SDK 11.0.100 or a later 11.0 feature band (pinned in `global.json`; the projects target `net10.0`) with the MAUI workload: `dotnet workload install maui-windows`.
 - Internet access for the first build only, which downloads the pinned FFmpeg and llama.cpp binaries (see [Bundled native binaries](#bundled-native-binaries)).
 - Optional: a GPU with Vulkan support for the AI model. Without one, the CPU build is used.
 
-## Build and run
+### Build and run
 
 ```powershell
 git clone <repository> asset-manager
@@ -22,9 +30,9 @@ dotnet run --project AssetManager/AssetManager.csproj
 
 The first build downloads FFmpeg and llama.cpp, verifies their SHA-256 hashes, and keeps them in the git-ignored folders `AssetManager.Processing/native/ffmpeg` and `AssetManager.AI/native/llama`. Later builds work offline.
 
-On first start, the app creates its catalog at `%LOCALAPPDATA%\AssetManager\catalog.amdb`. Settings → Catalog can open or create a catalog elsewhere.
+On first start, the app creates its catalog in its data folder (see below). Settings → Catalog can open or create a catalog elsewhere.
 
-### Tests
+#### Tests
 
 ```powershell
 dotnet test --project AssetManager.Tests/AssetManager.Tests.csproj
@@ -41,11 +49,46 @@ Tests that need the real AI models or the sample asset library are skipped unles
 
 Test classes that start a real model server belong to the non-parallel `AiModelCollection`, since several multi-GB models loading at once on one GPU time out. Timing tests run alone in the `Performance` collection.
 
+## Data folder
+
+Everything the app creates lives in one data folder: the default catalog (`catalog.amdb`), `settings.json`, downloaded AI models (`models`), the extraction cache (`cache`), temporary files (`temp`), logs (`logs`) and the embedded browser profile (`webview`). Settings → About shows the folder in use, the mode and an "Open folder" button.
+
+| Mode | When | Data folder |
+|---|---|---|
+| Portable | The app folder contains a file named `portable` (the portable package ships it) | `data` next to `AssetManager.exe` |
+| Standard | No `portable` file, e.g. a build run from the repository | `%LOCALAPPDATA%\AssetManager` |
+| Fallback | A portable copy whose folder cannot be written (e.g. under `Program Files`) | `%LOCALAPPDATA%\AssetManager`; Settings → About says why |
+| Custom | The `ASSETMANAGER_DATA_DIR` environment variable is set (any build) | That folder, created if needed |
+
+Paths in `settings.json` that point inside the data folder (the catalog and model files) are stored relative to it. A portable copy can therefore be moved to another folder, or its drive can get another letter, and it still finds its catalog and models. Paths outside the data folder are stored as given.
+
+To use an existing catalog from a portable copy (for example the one in `%LOCALAPPDATA%\AssetManager` from a build run from source), either copy `catalog.amdb` and the `models` folder into the portable `data` folder before the first start, or open it with Settings → Catalog → "Open another catalog" and pick the model files in Settings → AI model.
+
+## Continuous integration and releases
+
+[`.github/workflows/build.yml`](.github/workflows/build.yml) runs on GitHub Actions (`windows-latest`):
+
+- **Every push and pull request to `master`** (and manual runs from the Actions tab): run the test suite with the pinned SDK. A failing test fails the run. Nothing is packaged.
+- **A version tag** runs the tests, then builds the portable package (with the MAUI workload), checks its contents (the AI runtime and FFmpeg with their licenses, no `.gguf` models), and publishes a GitHub Release with `AssetManager-<version>-win-x64-portable.zip`. Nothing is released if a test or the package check fails:
+
+  ```powershell
+  git tag v1.2.0
+  git push origin v1.2.0
+  ```
+
+  The tag must look like `v<major>.<minor>.<patch>`; the app then reports that version in Settings → About and in its log.
+
+The llama.cpp and FFmpeg downloads are cached between runs, keyed on the csproj files that pin them. The same publish runs locally:
+
+```powershell
+dotnet publish AssetManager/AssetManager.csproj -c Release -f net10.0-windows10.0.19041.0 -p:Portable=true -p:Version=1.2.0 -p:ApplicationDisplayVersion=1.2.0 -o publish/AssetManager
+```
+
 ## AI models
 
 The AI is optional. Without a model, imports still produce metadata and previews, and assets are marked "not enriched". The models run locally through the bundled `llama-server`. Nothing is sent to a remote service.
 
-Settings → AI model offers a one-click download of the recommended models from Hugging Face into `%LOCALAPPDATA%\AssetManager\models`. Downloads resume after interruption and are verified against pinned SHA-256 hashes:
+Settings → AI model offers a one-click download of the recommended models from Hugging Face into the `models` folder of the [data folder](#data-folder). Downloads resume after interruption and are verified against pinned SHA-256 hashes:
 
 | Package | Files | Used for |
 |---|---|---|
@@ -79,7 +122,7 @@ Main ideas (details in `design.md`):
 
 ### Debugging the app
 
-Debug builds of the MAUI app expose WebView2 DevTools on `127.0.0.1:9333` (`ASSETMANAGER_CDP_PORT` changes it; `0` disables it). `node tools/cdp.mjs` drives the running app from a terminal: `eval`, `text`, `click`, `type`, `nav`, `wait`, `shot`, `console`. The .NET log is written to `%LOCALAPPDATA%\AssetManager\logs\app-YYYYMMDD.log`.
+Debug builds of the MAUI app expose WebView2 DevTools on `127.0.0.1:9333` (`ASSETMANAGER_CDP_PORT` changes it; `0` disables it). `node tools/cdp.mjs` drives the running app from a terminal: `eval`, `text`, `click`, `type`, `nav`, `wait`, `shot`, `console`. The .NET log is written to `logs\app-YYYYMMDD.log` in the [data folder](#data-folder) (`%LOCALAPPDATA%\AssetManager` for a build run from the repository).
 
 ### Web dev host
 
@@ -94,7 +137,7 @@ It serves the same UI at `http://localhost:5022` and uses the same catalog and s
 | Component | Version | License | How it is included |
 |---|---|---|---|
 | [FFmpeg](https://ffmpeg.org) (LGPL shared build from [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds)) | 8.1 | LGPL 2.1+ | Downloaded at build time, SHA-256 pinned in `AssetManager.Processing.csproj`, copied to `ffmpeg/` beside the app with its `FFMPEG.LICENSE.txt`. The DLLs are loaded dynamically, unmodified, by the separate `ffmpeg.exe`/`ffprobe.exe` processes. |
-| [llama.cpp](https://github.com/ggml-org/llama.cpp) `llama-server` (Vulkan and CPU builds) | b12141 | MIT | Downloaded at build time, SHA-256 pinned in `AssetManager.AI.csproj`, copied to `llama/vulkan` and `llama/cpu` with its license. |
+| [llama.cpp](https://github.com/ggml-org/llama.cpp) `llama-server` (Vulkan and CPU builds) | b12141 | MIT | Downloaded at build time, SHA-256 pinned in `AssetManager.AI.csproj`, copied to `llama/vulkan` and `llama/cpu`. Its MIT license (from the same tag; the release zips do not include it) is checked in under `AssetManager.AI/licenses` and copied to `llama/LICENSE.txt`. |
 | [Assimp](https://github.com/assimp/assimp) through the AssimpNetter NuGet package | 6.x | BSD 3-Clause | NuGet package with the native library. |
 | [ImageMagick](https://imagemagick.org) through Magick.NET | Q8 x64 | ImageMagick License (Apache 2.0 style) | NuGet package with the native library. |
 | [sqlite-vec](https://github.com/asg017/sqlite-vec) `vec0.dll` | 0.1.9 | MIT | Checked in under `AssetManager.Data/native/win-x64` with its license. |

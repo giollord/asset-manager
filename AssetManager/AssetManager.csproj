@@ -55,6 +55,25 @@
     <MauiAsset Include="Resources\Raw\**" LogicalName="%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
+  <!--
+    Portable publish (spec "Portable Windows package"): a self-contained x64 folder that runs without installing .NET
+    or the Windows App SDK, with a "portable" marker so the app keeps its data in "data" next to the exe.
+      dotnet publish AssetManager/AssetManager.csproj -c Release -f net10.0-windows10.0.19041.0 -p:Portable=true
+        -p:Version=1.2.3 -p:ApplicationDisplayVersion=1.2.3 -o publish/AssetManager
+  -->
+  <PropertyGroup Condition="'$(Portable)' == 'true'">
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <PublishReadyToRun>false</PublishReadyToRun>
+    <PublishTrimmed>false</PublishTrimmed>
+    <CopyOutputSymbolsToPublishDirectory>false</CopyOutputSymbolsToPublishDirectory>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(Portable)' == 'true'">
+    <None Include="Packaging\portable" Link="portable" CopyToOutputDirectory="Never" CopyToPublishDirectory="Always" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
     <PackageReference Include="Microsoft.AspNetCore.Components.WebView.Maui" Version="$(MauiVersion)" />

@@ -1,0 +1,131 @@
+# Runs the tests on every push and pull request to master (spec "Automated build and tests").
+# A version tag (v1.2.3) also builds the portable Windows package and publishes it as a GitHub Release
+# (specs "Portable Windows package", "Versioned releases").
+name: Build
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*.*.*']
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Test
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up .NET (SDK from global.json)
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      # llama.cpp and FFmpeg are downloaded by the build (SHA-256 pinned in the csproj files); keep them between runs.
+      - name: Cache native binaries
+        uses: actions/cache@v6
+        with:
+          path: |
+            AssetManager.AI/native/llama
+            AssetManager.Processing/native/ffmpeg
+          key: native-${{ hashFiles('AssetManager.AI/AssetManager.AI.csproj', 'AssetManager.Processing/AssetManager.Processing.csproj') }}
+
+      # The test project does not reference the MAUI app, so no MAUI workload is needed here.
+      # Tests that need real AI models or sample assets skip themselves when their environment variables are unset.
+      - name: Test
+        run: dotnet test --project AssetManager.Tests/AssetManager.Tests.csproj
+
+  package:
+    name: Build portable package
+    if: github.ref_type == 'tag'
+    needs: test
+    runs-on: windows-latest
+    timeout-minutes: 45
+    outputs:
+      zip: ${{ steps.version.outputs.zip }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up .NET (SDK from global.json)
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Install the MAUI Windows workload
+        run: dotnet workload install maui-windows
+
+      - name: Cache native binaries
+        uses: actions/cache@v6
+        with:
+          path: |
+            AssetManager.AI/native/llama
+            AssetManager.Processing/native/ffmpeg
+          key: native-${{ hashFiles('AssetManager.AI/AssetManager.AI.csproj', 'AssetManager.Processing/AssetManager.Processing.csproj') }}
+
+      - name: Version
+        id: version
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Tag '$env:GITHUB_REF_NAME' is not a version like v1.2.3." }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "zip=AssetManager-$version-win-x64-portable.zip" >> $env:GITHUB_OUTPUT
+
+      - name: Publish portable build
+        shell: pwsh
+        run: >
+          dotnet publish AssetManager/AssetManager.csproj -c Release -f net10.0-windows10.0.19041.0
+          -p:Portable=true
+          -p:Version=${{ steps.version.outputs.version }}
+          -p:ApplicationDisplayVersion=${{ steps.version.outputs.version }}
+          -o publish/AssetManager
+
+      - name: Check package contents
+        shell: pwsh
+        run: |
+          $root = 'publish/AssetManager'
+          $required = 'AssetManager.exe', 'portable', 'llama/LICENSE.txt', 'llama/vulkan/llama-server.exe', 'llama/cpu/llama-server.exe',
+                      'ffmpeg/ffmpeg.exe', 'ffmpeg/ffprobe.exe', 'ffmpeg/FFMPEG.LICENSE.txt'
+          $missing = $required | Where-Object { -not (Test-Path (Join-Path $root $_)) }
+          if ($missing) { throw "Missing from the package: $($missing -join ', ')" }
+          $models = Get-ChildItem $root -Recurse -Filter *.gguf
+          if ($models) { throw "The package must not contain models: $($models.Name -join ', ')" }
+
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path publish/AssetManager -DestinationPath '${{ steps.version.outputs.zip }}'
+
+      - name: Upload portable zip
+        uses: actions/upload-artifact@v7
+        with:
+          name: portable-win-x64
+          path: ${{ steps.version.outputs.zip }}
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: portable-win-x64
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "$GITHUB_REF_NAME" "${{ needs.package.outputs.zip }}"
+          --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes

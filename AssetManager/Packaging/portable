@@ -1,0 +1,1 @@
+This file marks a portable copy of Asset Manager: the app keeps its catalog, settings, models, cache and logs in the "data" folder next to AssetManager.exe. Delete it to use %LOCALAPPDATA%\AssetManager instead.
