@@ -44,10 +44,11 @@
                 }
                 else
                 {
-                    <MudList T="long" Dense="true" Class="mt-2">
+                    @* Items select by their id; the route's id is the selected one (ids start at 1, so 0 selects none). *@
+                    <MudList T="long" Dense="true" Class="mt-2" SelectedValue="@(Id ?? 0)">
                         @foreach (var c in _collections)
                         {
-                            <MudListItem T="long" OnClick="() => Nav.NavigateTo(Href(c.Id))" Class="@(c.Id == Id ? "collection-row mud-selected-item" : "collection-row")" data-id="@c.Id">
+                            <MudListItem T="long" Value="c.Id" OnClick="() => Nav.NavigateTo(Href(c.Id))" Class="collection-row" data-id="@c.Id">
                                 <MudStack Spacing="0">
                                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
                                         <MudText Typo="Typo.body1" Style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">@c.Name</MudText>

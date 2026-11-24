@@ -38,3 +38,26 @@ export function stop() {
         audio = null;
     }
 }
+
+// Ctrl+A on the Browse page selects all assets, not the page's text. Text fields keep their own Ctrl+A; with the
+// details panel open it selects the panel's text only, and dialogs keep the browser's behaviour.
+let selectAllHandler = null;
+
+export function watchSelectAll(dotNet) {
+    unwatchSelectAll();
+    selectAllHandler = e => {
+        if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 'a') return;
+        if (e.target instanceof Element && e.target.closest('input, textarea, [contenteditable]')) return;
+        if (document.querySelector('.mud-dialog-container')) return;
+        e.preventDefault();
+        const details = document.querySelector('.asset-details.mud-drawer--open .mud-drawer-content');
+        if (details) getSelection().selectAllChildren(details);
+        else dotNet.invokeMethodAsync('SelectAllFromKeyboard');
+    };
+    document.addEventListener('keydown', selectAllHandler, true);
+}
+
+export function unwatchSelectAll() {
+    if (selectAllHandler) document.removeEventListener('keydown', selectAllHandler, true);
+    selectAllHandler = null;
+}

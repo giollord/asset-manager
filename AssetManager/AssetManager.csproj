@@ -34,10 +34,6 @@
     <Copyright>Copyright (c) 2026 Daniil Barkov</Copyright>
     <Description>Offline catalog for game assets</Description>
 
-    <!-- Versions -->
-    <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
-    <ApplicationVersion>1</ApplicationVersion>
-
     <!-- To develop, package, and publish an app to the Microsoft Store, see: https://aka.ms/MauiTemplateUnpackaged -->
     <WindowsPackageType>None</WindowsPackageType>
 
@@ -67,7 +63,8 @@
     Portable publish (spec "Portable Windows package"): a self-contained x64 folder that runs without installing .NET
     or the Windows App SDK, with a "portable" marker so the app keeps its data in "data" next to the exe.
       dotnet publish AssetManager/AssetManager.csproj -c Release -f net10.0-windows10.0.19041.0 -p:Portable=true
-        -p:Version=1.2.3 -p:ApplicationDisplayVersion=1.2.3 -o publish/AssetManager
+        -o publish/AssetManager
+    The version comes from the git tags (MinVer, see Directory.Build.props).
   -->
   <PropertyGroup Condition="'$(Portable)' == 'true'">
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>

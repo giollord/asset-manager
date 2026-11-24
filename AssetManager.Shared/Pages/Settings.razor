@@ -1,14 +1,51 @@
 @page "/settings"
+@inject IJSRuntime JS
 
 <PageTitle>Settings</PageTitle>
 
 <MudText Typo="Typo.h4" GutterBottom="true">Settings</MudText>
 
-<MudStack Spacing="4" Style="max-width: 1100px">
-    <CatalogSettings />
-    <AiModelSettings />
-    <ImportSettings />
-    <PreviewSettingsForm />
-    <MaintenanceSettings />
-    <AboutSettings />
-</MudStack>
+@* Section navigation and search (specs "Settings section navigation", "Settings search"; design D8). Sections that do not
+   match the search are hidden, not removed, so values typed into them survive a search. *@
+<div style="display: flex; gap: 16px; align-items: flex-start">
+    <div style="width: 240px; flex-shrink: 0; position: sticky; top: 0" id="settings-nav">
+        <MudTextField T="string" @bind-Value="_query" Immediate="true" Clearable="true" Placeholder="Search settings"
+                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Margin="Margin.Dense"
+                      Variant="Variant.Outlined" Class="mb-2" id="settings-search" />
+        <MudList T="string" Dense="true" SelectedValue="_current" id="settings-sections">
+            @foreach (var s in Visible)
+            {
+                <MudListItem T="string" Value="s.Id" Text="@s.Title" OnClick="() => GoToAsync(s.Id)" Class="settings-section-link" data-section="@s.Id" />
+            }
+        </MudList>
+    </div>
+
+    <MudStack Spacing="4" Style="flex: 1; min-width: 0; max-width: 1100px">
+        @if (!Visible.Any())
+        {
+            <MudAlert Severity="Severity.Info" id="settings-no-match">No settings match "@_query?.Trim()".</MudAlert>
+        }
+        @foreach (var s in SettingsSection.All)
+        {
+            <div id="@($"settings-{s.Id}")" class="settings-section" data-section="@s.Id" hidden="@(!s.Matches(_query))" style="scroll-margin-top: 16px">
+                <DynamicComponent Type="s.Component" />
+            </div>
+        }
+    </MudStack>
+</div>
+
+@code {
+    private string? _query;
+    private string? _current;
+    private IJSObjectReference? _layout;
+
+    private IEnumerable<SettingsSection> Visible => SettingsSection.All.Where(s => s.Matches(_query));
+
+    /// <summary>Scrolls the section into view in the content scroll container and marks it current.</summary>
+    private async Task GoToAsync(string id)
+    {
+        _current = id;
+        _layout ??= await JS.InvokeAsync<IJSObjectReference>("import", "./_content/AssetManager.Shared/js/layout.js");
+        await _layout.InvokeVoidAsync("scrollIntoView", $"settings-{id}");
+    }
+}

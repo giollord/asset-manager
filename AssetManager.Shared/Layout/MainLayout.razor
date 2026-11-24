@@ -6,8 +6,9 @@
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @inject ISnackbar Snackbar
+@inject AssetManager.Core.Platform.IWindowChrome Chrome
 
-<MudThemeProvider @ref="_themeProvider" IsDarkMode="_isDark" />
+<MudThemeProvider @ref="_themeProvider" Theme="_theme" IsDarkMode="_isDark" />
 <MudPopoverProvider />
 <MudDialogProvider />
 <MudSnackbarProvider />
@@ -15,13 +16,12 @@
 <PreviewRenderHost />
 
 <MudLayout>
-    <MudAppBar Elevation="1" Dense="true">
+    <MudAppBar Elevation="1" Dense="true" Style="@AppBarStyle">
         <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start" OnClick="() => _drawerOpen = !_drawerOpen" aria-label="Toggle navigation" />
         <img src="_content/AssetManager.Shared/logo-mark.svg" alt="" width="28" height="28" class="ml-2" />
         <MudText Typo="Typo.h6" Class="ml-2">Asset Manager</MudText>
         <MudSpacer />
         <JobsIndicator />
-        <ThemeToggle />
     </MudAppBar>
     <MudDrawer @bind-Open="_drawerOpen" ClipMode="DrawerClipMode.Always" Elevation="1" Variant="DrawerVariant.Mini" OpenMiniOnHover="false">
         <NavMenu />
@@ -47,6 +47,7 @@
 
 @code {
     private MudThemeProvider? _themeProvider;
+    private readonly MudTheme _theme = new();
     private bool _drawerOpen = true;
     private bool _isDark;
     private bool _systemDark;
@@ -57,6 +58,9 @@
     {
         Settings.Changed += OnSettingsChanged;
         Drops.Dropped += OnFilesDropped;
+        Chrome.Changed += OnChromeChanged;
+        Nav.LocationChanged += OnLocationChanged;
+        _path = new Uri(Nav.Uri).AbsolutePath;
         _isDark = Settings.Current.Theme == ThemeMode.Dark;
         await Startup.EnsureStartedAsync();
         _started = true;
@@ -69,6 +73,7 @@
             _systemDark = await _themeProvider.GetSystemDarkModeAsync();
             await _themeProvider.WatchSystemDarkModeAsync(OnSystemDarkChanged);
             ApplyTheme();
+            _layoutModule = await JS.InvokeAsync<IJSObjectReference>("import", "./_content/AssetManager.Shared/js/layout.js");
             try
             {
                 _selfRef = DotNetObjectReference.Create(this);
@@ -76,8 +81,43 @@
                 await module.InvokeVoidAsync("install", _selfRef);
             }
             catch (JSException) { } // drag and drop is optional
+            if (Chrome.IsCustomTitleBar)
+            {
+                var chrome = await JS.InvokeAsync<IJSObjectReference>("import", "./_content/AssetManager.Shared/js/windowChrome.js");
+                await chrome.InvokeVoidAsync("watch", _selfRef);
+            }
         }
     }
+
+    /// <summary>
+    /// The system caption buttons sit over the app bar's right end (spec "System caption buttons"), so the app bar
+    /// keeps that width free. Nothing is reserved without a custom title bar (spec "Browser host unchanged").
+    /// </summary>
+    private string? AppBarStyle => Chrome.CaptionButtonsWidth > 0
+        ? FormattableString.Invariant($"padding-right: {Math.Ceiling(Chrome.CaptionButtonsWidth)}px")
+        : null;
+
+    private IJSObjectReference? _layoutModule;
+    private string _path = "";
+
+    /// <summary>A new page starts at the top of the content scroll container (design D3).</summary>
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        var path = new Uri(e.Location).AbsolutePath;
+        if (path == _path) return;
+        _path = path;
+        if (_layoutModule is { } module) _ = InvokeAsync(async () =>
+        {
+            try { await module.InvokeVoidAsync("scrollContentToTop"); }
+            catch (JSDisconnectedException) { }
+        });
+    }
+
+    private void OnChromeChanged() => InvokeAsync(StateHasChanged);
+
+    /// <summary>The app bar's interactive elements, reported by windowChrome.js, take clicks instead of dragging.</summary>
+    [JSInvokable]
+    public void SetInteractiveRegions(AssetManager.Core.Platform.ChromeRect[] regions) => Chrome.SetInteractiveRegions(regions);
 
     private DotNetObjectReference<MainLayout>? _selfRef;
 
@@ -108,6 +148,10 @@
             ThemeMode.Light => false,
             _ => _systemDark,
         };
+        // Caption buttons follow the theme's app bar colours (spec "System caption buttons").
+        var text = (_isDark ? _theme.PaletteDark : _theme.PaletteLight).AppbarText;
+        Chrome.SetCaptionColors(text.ToString(MudBlazor.Utilities.MudColorOutputFormats.HexA),
+            text.SetAlpha(0.12).ToString(MudBlazor.Utilities.MudColorOutputFormats.HexA));
         StateHasChanged();
     }
 
@@ -115,6 +159,8 @@
     {
         Settings.Changed -= OnSettingsChanged;
         Drops.Dropped -= OnFilesDropped;
+        Chrome.Changed -= OnChromeChanged;
+        Nav.LocationChanged -= OnLocationChanged;
         _selfRef?.Dispose();
     }
 }

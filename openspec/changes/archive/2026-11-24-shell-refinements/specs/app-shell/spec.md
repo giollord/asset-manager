@@ -29,6 +29,10 @@ UI chrome SHALL NOT be selectable: page and section headings, labels, buttons, n
 - **WHEN** the user drags over the asset name in the asset details panel and copies it
 - **THEN** the clipboard holds that name
 
+#### Scenario: Select all on Browse
+- **WHEN** the user presses Ctrl+A on the Browse page, outside a text field and with the details panel closed
+- **THEN** all assets matching the filters are selected and no page text is highlighted; in a text field Ctrl+A selects that field's text, and with the details panel open it selects only the panel's text
+
 #### Scenario: Navigation not selectable
 - **WHEN** the user drags across the navigation menu
 - **THEN** no menu item text is highlighted

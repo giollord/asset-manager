@@ -39,13 +39,18 @@ On window creation (MAUI `ConfigureLifecycleEvents` → `OnWindowCreated`), the 
 
 Before the first navigation (`BlazorWebViewInitializing`/`Initialized`), the host sets `CoreWebView2.Settings.IsNonClientRegionSupportEnabled = true`. `app.css` then marks the app bar `app-region: drag` and its buttons, menus and the drawer toggle `app-region: no-drag`. WebView2 treats drag regions as the caption area: drag moves the window, double-click maximizes, right-click opens the system menu.
 - **Alternative (fallback):** Windows App SDK `InputNonClientPointerSource.SetRegionRects(NonClientRegionKind.Caption, …)`, with the app bar's rectangle minus its buttons reported from JS on layout changes. It is also official and also free of interop, but it needs rectangles kept in sync. It is used only if the spike (task 1) shows that WebView2's regions don't work in MAUI's WinUI WebView2.
+- **Spike outcome (task 1):** WebView2's regions do not work in MAUI's WinUI WebView2. With the content extended into the title bar, the system's default caption strip (the title bar height across the window, minus the caption buttons) wins over the page: the app bar dragged even with `app-region: no-drag` on it, and the drawer toggle did not click. The fallback is used in a simpler form: the system's default caption strip stays as the drag area (it is exactly the 48 px app bar at the `Tall` height), and `js/windowChrome.js` reports the app bar's interactive elements (those that compute to `app-region: no-drag` in `app.css`) on layout changes. The host sets them as `NonClientRegionKind.Passthrough` rectangles through `InputNonClientPointerSource`. `IsNonClientRegionSupportEnabled` is not set. `IWindowChrome` gains a fourth member, `SetInteractiveRegions`, for this.
+- **MAUI's title row:** it is the template part `AppTitleBarContainer` of MAUI's `WindowRootView`, laid over the page, and the page's NavigationView `ContentGrid` gets a top margin of its height. The host collapses that part and pins `ContentGrid`'s margin to 0 once the window is first laid out, both found by name in the WinUI visual tree. This relies on MAUI internals (MAUI 10.0.110) and must be rechecked when MAUI is upgraded.
+- **Drag area height:** MAUI sets the window's drag rectangles from its title row (full width × 32 DIPs, stale after the row is collapsed) on every resize, so only the upper two thirds of the 48 px app bar moved the window. The host sets the drag rectangle to the full width × the tall title bar's height, queued after MAUI's handlers on every resize, maximize and display scale change. Verified at 100% and 150%.
+- **Display scale:** the caption-button width and the passthrough rectangles use the WinUI `XamlRoot.RasterizationScale`, read once the window's content is laid out (it is not available at first activation).
 - **Rejected:** MAUI's `TitleBar` control (a native row above the WebView, so two headers). Third-party window-chrome packages: none for MAUI Blazor is both widely used and from a known maintainer. P/Invoke on `WM_NCHITTEST`: the user ruled out "magic with system DLLs".
 
 ### D2. A window-chrome platform service feeds the shared UI
-`AssetManager.Core.Platform.IWindowChrome` has three members:
+`AssetManager.Core.Platform.IWindowChrome` has four members:
 - `bool IsCustomTitleBar`
 - `double CaptionButtonsWidth` in CSS pixels, with a `Changed` event for DPI or size changes
 - `void SetCaptionColors(string foreground, string hoverBackground)`
+- `void SetInteractiveRegions(IReadOnlyList<ChromeRect>)`: the app bar's clickable elements in CSS pixels (D1, spike outcome)
 
 The Windows implementation reads `AppWindow.TitleBar.RightInset` divided by the display scale. The web host registers a no-op version (`IsCustomTitleBar = false`). `MainLayout` reserves the width as right padding on the app bar, and updates the caption colours from the MudBlazor palette (`AppbarText`, `ActionDefault`) whenever the theme changes.
 
@@ -54,7 +59,10 @@ In `app.css`:
 - `html, body` get `height: 100%; overflow: hidden`
 - `.mud-main-content` gets `position: fixed` below the app bar: `top: var(--mud-appbar-height)`, `bottom: 0`, `left` and `right` following the drawer through MudBlazor's own layout variables, `overflow-y: auto`, and the top padding MudBlazor adds removed
 
-That element becomes the scroll container, and its scrollbar starts at the app bar's bottom edge. `MainLayout` resets that container's scroll position on `LocationChanged`, since Blazor's automatic scroll-to-top only resets the document. The exact CSS (fixed versus a flex column) is settled in the task against MudBlazor's drawer variants. The requirement is the observable behaviour in the spec.
+That element becomes the scroll container, and its scrollbar starts at the app bar's bottom edge.
+- **Settled in task 3.1:** `position: absolute` inside `.mud-layout` (given `height: 100vh`), not `fixed`. A fixed element is a stacking context, which trapped the pages' own fixed layers (the asset details drawer, z-index 1302) below the app bar (1300).
+- **Browse** (changed at the user's request): its asset grid no longer has its own scroll area. The list scrolls with the content area like every other page. The filter panel and the result header are sticky, and the list runs to the window's bottom edge.
+- **Temporary drawers** (the asset details drawer) open below the app bar instead of over it. Over it, their header buttons sat under the system caption buttons and inside the strip that moves the window. `MainLayout` resets that container's scroll position on `LocationChanged`, since Blazor's automatic scroll-to-top only resets the document. The exact CSS (fixed versus a flex column) is settled in the task against MudBlazor's drawer variants. The requirement is the observable behaviour in the spec.
 
 ### D4. Opt-in selection
 `app.css` sets `body { user-select: none }`. Selection is re-enabled for `.selectable`, `input`, `textarea` and `[contenteditable]`. The `selectable` class goes on these elements:
@@ -63,9 +71,12 @@ That element becomes the scroll container, and its scrollbar starts at the app b
 - collection names on their pages
 - `JobProgressView`'s current item and error, and job history messages
 - About values
+- in Settings, the open catalog's path and size, and the recommended models' texts (added during implementation at the user's request)
+- asset names on cards, alert and snackbar messages (CSS, no class needed)
 - asset names in import review
 
 An opt-in class keeps the default safe for new UI, so new chrome is never selectable by accident.
+- **Ctrl+A on Browse** (added during implementation at the user's request): a page-level key handler in `browse.js` selects all matching assets and suppresses the browser's select-all, except in text fields and dialogs. With the details panel open, it selects only the panel's text. It replaces the grid's own handler, which only worked while the grid had focus.
 - **Rejected:** opt-out per element (`.no-select` on headings and nav). Every new heading would need it, and Ctrl+A would still catch whatever was missed.
 
 ### D5. Lists select by value

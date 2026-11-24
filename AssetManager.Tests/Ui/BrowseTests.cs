@@ -130,6 +130,12 @@ public class BrowseTests : BunitContext
 
         page.Find("#select-all").Click();
         page.WaitForAssertion(() => Assert.Equal(12, page.Instance.Selected.Count));
+
+        // Escape clears; Ctrl+A on the page (reported by browse.js) selects every asset again.
+        page.Find("#browse-grid").KeyDown(new KeyboardEventArgs { Key = "Escape" });
+        Assert.Empty(page.Instance.Selected);
+        await page.InvokeAsync(() => page.Instance.SelectAllFromKeyboard());
+        page.WaitForAssertion(() => Assert.Equal(12, page.Instance.Selected.Count));
     }
 
     [Fact]
@@ -184,6 +190,9 @@ public class BrowseTests : BunitContext
         page.Find("textarea#details-edit-description").Change("A crate with iron bands");
         page.Find("#details-edit-save").Click();
         page.WaitForAssertion(() => Assert.Contains("edited", page.Find("#details-description").TextContent));
+        // Spec "Selectable text": the name and description can be copied; UI chrome cannot.
+        Assert.Contains("selectable", page.Find("#details-name").ClassList);
+        Assert.Contains("selectable", page.Find("#details-description").ClassList);
 
         var tagInput = page.Find("#asset-details .tag-input input");
         tagInput.Input("wooden");

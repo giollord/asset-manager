@@ -11,7 +11,7 @@
     with its default, validation and reset. Values are stored in the catalog and apply to new previews only.
 *@
 <MudPaper Class="pa-4" Outlined="true" id="preview-settings">
-    <MudText Typo="Typo.h6">Previews</MudText>
+    <MudText Typo="Typo.h6">@Title</MudText>
     <MudAlert Severity="Severity.Info" Dense="true" Class="my-2">
         These apply to new previews. Existing previews change only when they are regenerated ("Regenerate outdated previews" below).
     </MudAlert>
@@ -49,6 +49,11 @@
 </MudPaper>
 
 @code {
+    public const string Title = "Previews";
+
+    /// <summary>The section's title and setting names (every preview option), for the Settings search (design D8).</summary>
+    public static IReadOnlyList<string> SearchTerms => [Title, .. Fields.Select(f => f.Label)];
+
     public sealed record Field(PropertyInfo Property, string Name, string Label, object? Default, RangeAttribute? Range);
 
     private static readonly PreviewOptions Defaults = new();

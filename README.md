@@ -71,7 +71,7 @@ To use an existing catalog from a portable copy (for example the one in `%LOCALA
 [`.github/workflows/build.yml`](.github/workflows/build.yml) runs on GitHub Actions (`windows-latest`):
 
 - **Every push and pull request to `master`** (and manual runs from the Actions tab): run the test suite with the pinned SDK. A failing test fails the run. Nothing is packaged.
-- **A version tag** runs the tests, then builds the portable package (with the MAUI workload), checks its contents (the app's `LICENSE.txt`, the AI runtime and FFmpeg with their licenses, no `.gguf` models), and publishes a GitHub Release with `AssetManager-<version>-win-x64-portable.zip`. Nothing is released if a test or the package check fails:
+- **A version tag** runs the tests, then builds the portable package (with the MAUI workload), checks its contents (the app's `LICENSE.txt`, the AI runtime and FFmpeg with their licenses, no `.gguf` models) and that `AssetManager.exe` reports the tag's version, and publishes a GitHub Release with `AssetManager-<version>-win-x64-portable.zip`. Nothing is released if a test or the package check fails:
 
   ```powershell
   git tag v1.2.0
@@ -80,10 +80,12 @@ To use an existing catalog from a portable copy (for example the one in `%LOCALA
 
   The tag must look like `v<major>.<minor>.<patch>`; the app then reports that version in Settings → About and in its log.
 
-The llama.cpp and FFmpeg downloads are cached between runs, keyed on the csproj files that pin them. The same publish runs locally:
+The version always comes from the git tags, through [MinVer](https://github.com/adamralph/minver) (a build-time package in [`Directory.Build.props`](Directory.Build.props)): a build of the commit tagged `v1.2.0` is `1.2.0`, and a build five commits later is `1.2.1-alpha.0.5`. Both CI jobs check out the full history with tags; a clone without them builds as `0.0.0-alpha.0`.
+
+The llama.cpp and FFmpeg downloads are cached between runs, keyed on the csproj files that pin them. The same publish runs locally, with the version of the checked-out commit:
 
 ```powershell
-dotnet publish AssetManager/AssetManager.csproj -c Release -f net10.0-windows10.0.19041.0 -p:Portable=true -p:Version=1.2.0 -p:ApplicationDisplayVersion=1.2.0 -o publish/AssetManager
+dotnet publish AssetManager/AssetManager.csproj -c Release -f net10.0-windows10.0.19041.0 -p:Portable=true -o publish/AssetManager
 ```
 
 ## AI models

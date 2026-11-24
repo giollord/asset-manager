@@ -30,7 +30,7 @@
         <div class="pa-4" style="overflow-y: auto; height: 100%">
             <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
                 <MudIcon Icon="@AssetCard.TypeIcon(a.Type)" />
-                <MudText Typo="Typo.h6" Style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap" title="@a.Name" id="details-name">@a.Name</MudText>
+                <MudText Typo="Typo.h6" Class="selectable" Style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap" title="@a.Name" id="details-name">@a.Name</MudText>
                 <MudTooltip Text="@(a.IsStored ? "Stored in the catalog — remove the stored copy" : "Store the original in the catalog (works offline)")">
                     <MudIconButton Icon="@(a.IsStored ? Icons.Material.Filled.Inventory : Icons.Material.Outlined.Inventory2)" Size="Size.Small"
                                    Color="@(a.IsStored ? Color.Success : Color.Default)" OnClick="ToggleStoredAsync" id="details-store" />
@@ -156,14 +156,14 @@
             @* ---- description, tags, license, links ---- *@
             @if (!string.IsNullOrWhiteSpace(a.Description))
             {
-                <MudText Typo="Typo.body2" HtmlTag="div" Class="mt-3" id="details-description">@a.Description @Edited(EditedFields.Description)</MudText>
+                <MudText Typo="Typo.body2" HtmlTag="div" Class="mt-3 selectable" id="details-description">@a.Description @Edited(EditedFields.Description)</MudText>
             }
             <MudText Typo="Typo.subtitle2" Class="mt-3">Tags</MudText>
             <TagEditor Tags="_d.Tags" OnAdd="AddTagAsync" OnRemove="RemoveTagAsync" />
 
             <MudText Typo="Typo.subtitle2" Class="mt-3">License</MudText>
             <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" id="details-license">
-                <LicenseBadge License="a.HasLicenseOverride ? a.LicenseOverride : a.Source.License" />
+                <span class="selectable"><LicenseBadge License="a.HasLicenseOverride ? a.LicenseOverride : a.Source.License" /></span>
                 @if (a.HasLicenseOverride)
                 {
                     <MudText Typo="Typo.caption" Class="mud-text-secondary">set for this asset</MudText>
@@ -176,7 +176,7 @@
                 <MudText Typo="Typo.subtitle2" Class="mt-3">Links</MudText>
                 @foreach (var link in links)
                 {
-                    <div><MudLink Typo="Typo.body2" OnClick="() => OpenLinkAsync(link.Url)" title="@link.Url">@(link.Label ?? link.Url)</MudLink></div>
+                    <div><MudLink Typo="Typo.body2" Class="selectable" OnClick="() => OpenLinkAsync(link.Url)" title="@link.Url">@(link.Label ?? link.Url)</MudLink></div>
                 }
             }
             @if (a.Source.Store.Url is { } storeUrl)
@@ -188,7 +188,7 @@
             <MudText Typo="Typo.subtitle2" Class="mt-3">Source</MudText>
             <MudBreadcrumbs Items="_chain" Class="pa-0" id="details-sources">
                 <ItemTemplate Context="item">
-                    <MudLink Typo="Typo.body2" OnClick="() => BrowseSource(long.Parse(item.Href!))">@item.Text</MudLink>
+                    <MudLink Typo="Typo.body2" Class="selectable" OnClick="() => BrowseSource(long.Parse(item.Href!))">@item.Text</MudLink>
                 </ItemTemplate>
             </MudBreadcrumbs>
             <MudSimpleTable Dense="true" Elevation="0" Class="mt-1" id="details-files">
@@ -196,7 +196,7 @@
                     @foreach (var f in a.Files.OrderBy(f => f.Role))
                     {
                         <tr>
-                            <td style="word-break: break-all"><MudText Typo="Typo.caption">@(f.RelativePath.Length > 0 ? f.RelativePath : f.FileName)</MudText></td>
+                            <td style="word-break: break-all"><MudText Typo="Typo.caption" Class="selectable">@(f.RelativePath.Length > 0 ? f.RelativePath : f.FileName)</MudText></td>
                             <td><MudText Typo="Typo.caption">@f.Role</MudText></td>
                             <td style="white-space: nowrap"><MudText Typo="Typo.caption">@Pages.Dashboard.Bytes(f.Size)</MudText></td>
                         </tr>
@@ -210,7 +210,7 @@
                 <tbody>
                     @foreach (var (label, value) in Facts(a))
                     {
-                        <tr><td><MudText Typo="Typo.caption" Class="mud-text-secondary">@label</MudText></td><td><MudText Typo="Typo.caption">@value</MudText></td></tr>
+                        <tr><td><MudText Typo="Typo.caption" Class="mud-text-secondary">@label</MudText></td><td><MudText Typo="Typo.caption" Class="selectable">@value</MudText></td></tr>
                     }
                 </tbody>
             </MudSimpleTable>

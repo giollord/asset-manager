@@ -35,10 +35,11 @@
         }
         else
         {
-            <MudList T="long" Dense="true">
+            @* Items select by their id; the route's id is the selected one (ids start at 1, so 0 selects none). *@
+            <MudList T="long" Dense="true" SelectedValue="@(Id ?? 0)">
                 @foreach (var s in Visible)
                 {
-                    <MudListItem T="long" OnClick="() => Select(s.Id)" Class="@(s.Id == Id ? "source-row mud-selected-item" : "source-row")" data-id="@s.Id">
+                    <MudListItem T="long" Value="s.Id" OnClick="() => Select(s.Id)" Class="source-row" data-id="@s.Id">
                         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
                             <MudIcon Icon="@KindIcon(s.Kind)" Size="Size.Small" Class="mud-text-secondary" />
                             <MudText Typo="Typo.body2" Style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap" title="@s.Name">@s.Name</MudText>
@@ -65,7 +66,7 @@
             <MudPaper Outlined="true" Class="pa-4" id="source-details">
                 <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
                     <MudIcon Icon="@KindIcon(s.Kind)" Color="Color.Primary" />
-                    <MudText Typo="Typo.h5" Style="flex: 1">@s.DisplayName</MudText>
+                    <MudText Typo="Typo.h5" Class="selectable" Style="flex: 1" id="source-name">@s.DisplayName</MudText>
                     <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.GridView" OnClick="() => Nav.NavigateTo(BrowseHref(s.Id))" id="source-browse">
                         Show @Total.ToString("N0") assets
                     </MudButton>
@@ -82,7 +83,7 @@
                         <tr><td style="width: 160px">Kind</td><td>@KindLabel(s.Kind)</td></tr>
                         <tr>
                             <td>Location</td>
-                            <td style="word-break: break-all" id="source-location">
+                            <td style="word-break: break-all" class="selectable" id="source-location">
                                 @LocationText(s.Location)
                                 @if (s.Location.VolumeId is { } vol && Volumes.GetRoot(vol) is null)
                                 {
@@ -94,15 +95,15 @@
                         <tr><td>Assets</td><td>@_d.OwnAssets.ToString("N0") directly@(Total != _d.OwnAssets ? $", {Total:N0} with nested sources" : "")</td></tr>
                         @if (HasStoreInfo(s.Store))
                         {
-                            <tr><td>Package</td><td id="source-package">@string.Join(" · ", new[] { s.Store.Title, s.Store.Publisher, s.Store.Version is null ? null : "v" + s.Store.Version }.Where(x => !string.IsNullOrWhiteSpace(x)))</td></tr>
+                            <tr><td>Package</td><td class="selectable" id="source-package">@string.Join(" · ", new[] { s.Store.Title, s.Store.Publisher, s.Store.Version is null ? null : "v" + s.Store.Version }.Where(x => !string.IsNullOrWhiteSpace(x)))</td></tr>
                             @if (s.Store.StoreId is not null)
                             {
-                                <tr><td>Asset Store id</td><td>@s.Store.StoreId</td></tr>
+                                <tr><td>Asset Store id</td><td class="selectable">@s.Store.StoreId</td></tr>
                             }
                         }
                         @if (s.Error is not null)
                         {
-                            <tr><td>Error</td><td><MudText Typo="Typo.body2" Color="Color.Error">@s.Error</MudText></td></tr>
+                            <tr><td>Error</td><td><MudText Typo="Typo.body2" Color="Color.Error" Class="selectable" id="source-error">@s.Error</MudText></td></tr>
                         }
                     </tbody>
                 </MudSimpleTable>
@@ -116,21 +117,21 @@
                     }
                     @foreach (var link in s.Links)
                     {
-                        <div><MudLink Typo="Typo.body2" OnClick="() => OpenLinkAsync(link.Url)" title="@link.Url">@(link.Label ?? link.Url)</MudLink></div>
+                        <div><MudLink Typo="Typo.body2" Class="selectable" OnClick="() => OpenLinkAsync(link.Url)" title="@link.Url">@(link.Label ?? link.Url)</MudLink></div>
                     }
                 }
 
                 @if (!string.IsNullOrWhiteSpace(s.Description))
                 {
                     <MudText Typo="Typo.subtitle2" Class="mt-3">Description</MudText>
-                    <MudText Typo="Typo.body2" Style="white-space: pre-wrap">@s.Description</MudText>
+                    <MudText Typo="Typo.body2" Class="selectable" Style="white-space: pre-wrap" id="source-description">@s.Description</MudText>
                 }
 
                 <MudText Typo="Typo.subtitle2" Class="mt-3">License</MudText>
                 @if (_edit is null)
                 {
                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-                        <LicenseBadge License="s.License" />
+                        <span class="selectable"><LicenseBadge License="s.License" /></span>
                         @if (s.UserEdited.HasFlag(EditedFields.License))
                         {
                             <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">edited</MudChip>
@@ -138,15 +139,15 @@
                     </MudStack>
                     @if (!string.IsNullOrWhiteSpace(s.License.AttributionText))
                     {
-                        <MudText Typo="Typo.body2" Class="mt-1" Style="white-space: pre-wrap">Attribution: @s.License.AttributionText</MudText>
+                        <MudText Typo="Typo.body2" Class="mt-1 selectable" Style="white-space: pre-wrap">Attribution: @s.License.AttributionText</MudText>
                     }
                     @if (!string.IsNullOrWhiteSpace(s.License.Evidence))
                     {
-                        <MudText Typo="Typo.caption" Class="mud-text-secondary">From @s.License.Evidence</MudText>
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary selectable">From @s.License.Evidence</MudText>
                     }
 
                     <MudText Typo="Typo.subtitle2" Class="mt-3">Notes</MudText>
-                    <MudText Typo="Typo.body2" Style="white-space: pre-wrap" id="source-notes">@(string.IsNullOrWhiteSpace(s.Notes) ? "None" : s.Notes)</MudText>
+                    <MudText Typo="Typo.body2" Class="selectable" Style="white-space: pre-wrap" id="source-notes">@(string.IsNullOrWhiteSpace(s.Notes) ? "None" : s.Notes)</MudText>
                     <MudButton Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Edit" Class="mt-2" OnClick="StartEdit" id="source-edit">Edit license and notes</MudButton>
                 }
                 else
@@ -179,10 +180,10 @@
                 @if (_d.Children.Count > 0)
                 {
                     <MudText Typo="Typo.subtitle2" Class="mt-3">Nested sources</MudText>
-                    <MudList T="long" Dense="true">
+                    <MudList T="long" Dense="true" SelectedValue="@(Id ?? 0)" id="source-children">
                         @foreach (var (child, count) in _d.Children)
                         {
-                            <MudListItem T="long" OnClick="() => Select(child.Id)">
+                            <MudListItem T="long" Value="child.Id" OnClick="() => Select(child.Id)" Class="source-child" data-id="@child.Id">
                                 <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
                                     <MudIcon Icon="@KindIcon(child.Kind)" Size="Size.Small" Class="mud-text-secondary" />
                                     <MudText Typo="Typo.body2" Style="flex: 1">@child.DisplayName</MudText>

@@ -24,7 +24,10 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
+      # Full history with tags: MinVer derives the version from them (design D9).
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Set up .NET (SDK from global.json)
         uses: actions/setup-dotnet@v6
@@ -54,7 +57,10 @@ jobs:
     outputs:
       zip: ${{ steps.version.outputs.zip }}
     steps:
+      # Full history with tags: MinVer derives the version from them (design D9).
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Set up .NET (SDK from global.json)
         uses: actions/setup-dotnet@v6
@@ -86,8 +92,6 @@ jobs:
         run: >
           dotnet publish AssetManager/AssetManager.csproj -c Release -f net10.0-windows10.0.19041.0
           -p:Portable=true
-          -p:Version=${{ steps.version.outputs.version }}
-          -p:ApplicationDisplayVersion=${{ steps.version.outputs.version }}
           -o publish/AssetManager
 
       - name: Check package contents
@@ -100,6 +104,17 @@ jobs:
           if ($missing) { throw "Missing from the package: $($missing -join ', ')" }
           $models = Get-ChildItem $root -Recurse -Filter *.gguf
           if ($models) { throw "The package must not contain models: $($models.Name -join ', ')" }
+
+      # The version comes from the git tag through MinVer; a shallow or tagless checkout would build 0.0.0-alpha.0.
+      - name: Check version
+        shell: pwsh
+        env:
+          EXPECTED_VERSION: ${{ steps.version.outputs.version }}
+          PACKAGE_ROOT: publish/AssetManager
+        run: |
+          $actual = (Get-Item (Join-Path $env:PACKAGE_ROOT 'AssetManager.exe')).VersionInfo.ProductVersion -replace '\+.*$', ''
+          if ($actual -ne $env:EXPECTED_VERSION) { throw "AssetManager.exe reports version '$actual', but the tag is v$($env:EXPECTED_VERSION)." }
+          "AssetManager.exe reports $actual, matching the tag."
 
       - name: Zip
         shell: pwsh

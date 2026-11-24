@@ -3,14 +3,9 @@
 @inject IProgressHub Hub
 @inject NavigationManager Nav
 
-@* App-bar indicator (design D8): active job count and combined progress; opens a quick view that links to the Jobs page. *@
-@if (_active.Count == 0)
-{
-    <MudTooltip Text="Background jobs">
-        <MudIconButton Icon="@Icons.Material.Filled.Sync" Color="Color.Inherit" Href="jobs" aria-label="Jobs" />
-    </MudTooltip>
-}
-else
+@* App-bar indicator (design D8): active job count and combined progress; opens a quick view that links to the Jobs page.
+   Nothing at all while no job runs (spec "Global progress indicator"); the Jobs page stays in the navigation menu. *@
+@if (_active.Count > 0)
 {
     <MudMenu AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" id="jobs-indicator">
         <ActivatorContent>

@@ -18,8 +18,10 @@
 
 <AssetDetailsDrawer AssetId="_details" OnClose="() => _details = null" />
 
-<div style="display: flex; gap: 16px; align-items: flex-start">
-    <MudPaper Outlined="true" Class="pa-3 browse-filters" id="browse-filters" Style="max-height: calc(100vh - 120px); overflow-y: auto">
+@* The asset list scrolls with the page's content area (the window-side scrollbar); the filters and the result header
+   stay in place (design D3). *@
+<div class="browse-page" style="display: flex; gap: 16px; align-items: flex-start">
+    <MudPaper Outlined="true" Class="pa-3 browse-filters" id="browse-filters">
         <MudTextField T="string" Value="_query.Text" ValueChanged="t => SetQuery(_query with { Text = string.IsNullOrWhiteSpace(t) ? null : t })"
                       Label="Search" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" DebounceInterval="300"
                       Clearable="true" Margin="Margin.Dense" Variant="Variant.Outlined" id="search-text" />
@@ -116,7 +118,7 @@
     </MudPaper>
 
     <div style="flex: 1; min-width: 0">
-        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2" Style="min-height: 40px">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="browse-header" Style="min-height: 40px">
             <MudText Typo="Typo.h6" id="result-count">@(_total is { } t ? $"{t:N0} asset{(t == 1 ? "" : "s")}" : "…")</MudText>
             @if (_selected.Count > 0)
             {
@@ -131,8 +133,8 @@
         {
             <MudAlert Severity="Severity.Warning" Class="mb-2" id="browse-error">@_error</MudAlert>
         }
-        <div @ref="_grid" class="browse-grid" tabindex="0" @onkeydown="OnKeyDown" @onkeydown:preventDefault="_preventKey"
-             style="height: calc(100vh - 180px); overflow-y: auto; outline: none" id="browse-grid">
+        <div @ref="_grid" class="browse-grid" tabindex="0" @onkeydown="OnKeyDown"
+             style="outline: none" id="browse-grid">
             <Virtualize @ref="_virtualize" TItem="Row" ItemsProvider="LoadRowsAsync" ItemSize="RowHeight" OverscanCount="3" Context="row">
                 <ItemContent>
                     <div class="browse-row" style="height: @(RowHeight)px">
@@ -181,7 +183,6 @@
     private readonly HashSet<long> _selected = [];
     private int? _anchor;
     private long? _playing;
-    private bool _preventKey;
     private int _previewVersion; // bumped when the catalog changes, so cards reload regenerated previews
     private IReadOnlyList<CollectionCount> _collections = [];
     private IReadOnlyList<SourceCount> _sources = [];
@@ -217,6 +218,7 @@
             _module = await JS.InvokeAsync<IJSObjectReference>("import", "./_content/AssetManager.Shared/js/browse.js");
             var columns = await _module.InvokeAsync<int>("observeWidth", _grid, _self, CardWidth, Gap);
             if (columns > 0) await ColumnsChanged(columns);
+            await _module.InvokeVoidAsync("watchSelectAll", _self);
         }
         catch (JSException) { }
         catch (InvalidOperationException) { } // prerendering / no JS
@@ -372,16 +374,21 @@
 
     private async Task<IEnumerable<long>> IdsAsync(int skip, int take) => (await Search.SearchAsync(_query, skip, take)).Items.Select(i => i.Id);
 
-    private async Task OnKeyDown(KeyboardEventArgs e)
+    private void OnKeyDown(KeyboardEventArgs e)
     {
-        _preventKey = false;
-        if ((e.CtrlKey || e.MetaKey) && e.Key is "a" or "A")
-        {
-            _preventKey = true;
-            await SelectAllAsync();
-        }
-        else if (e.Key == "Escape") ClearSelection();
+        if (e.Key == "Escape") ClearSelection();
     }
+
+    /// <summary>
+    /// Ctrl+A anywhere on the page selects every matching asset instead of the page's text (browse.js decides: not in
+    /// a text field, and not while the details panel or a dialog is open, where Ctrl+A keeps selecting text).
+    /// </summary>
+    [JSInvokable]
+    public Task SelectAllFromKeyboard() => InvokeAsync(async () =>
+    {
+        await SelectAllAsync();
+        StateHasChanged();
+    });
 
     // ---- card extras ----
 
@@ -470,6 +477,7 @@
             try
             {
                 await _module.InvokeVoidAsync("unobserve");
+                await _module.InvokeVoidAsync("unwatchSelectAll");
                 await _module.InvokeVoidAsync("stop");
                 await _module.DisposeAsync();
             }

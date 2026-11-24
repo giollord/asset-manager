@@ -41,6 +41,8 @@ public class AboutSettingsTests : BunitContext
         Assert.StartsWith("Portable", about.Find("#about-mode").TextContent);
         Assert.Equal(root, about.Find("#about-data-folder").TextContent.Trim());
         Assert.Equal(AppVersion.Current, about.Find("#about-version").TextContent);
+        Assert.Contains("selectable", about.Find("#about-version").ClassList);
+        Assert.Contains("selectable", about.Find("#about-data-folder").ClassList);
         Assert.Empty(about.FindAll("#about-fallback"));
 
         about.Find("#about-open-folder").Click();

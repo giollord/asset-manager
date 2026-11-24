@@ -15,6 +15,8 @@ builder.Services.AddSingleton<IClipboardFileService>(sp => sp.GetRequiredService
 builder.Services.AddSingleton<IFolderPicker>(sp => sp.GetRequiredService<UnsupportedPlatformServices>());
 builder.Services.AddSingleton<IFilePicker>(sp => sp.GetRequiredService<UnsupportedPlatformServices>());
 builder.Services.AddSingleton<IShellService>(sp => sp.GetRequiredService<UnsupportedPlatformServices>());
+// No window frame in a browser tab: the app bar reserves nothing for caption buttons (spec "Browser host unchanged").
+builder.Services.AddSingleton<IWindowChrome, NoWindowChrome>();
 builder.Services.AddAssetManager();
 
 var app = builder.Build();

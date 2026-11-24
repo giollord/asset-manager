@@ -32,7 +32,7 @@
             {
                 <MudCheckBox T="bool" Value="Selected" ValueChanged="v => SelectedChanged.InvokeAsync(v)" Size="Size.Small" Dense="true" Class="asset-select" />
             }
-            <MudText Typo="Typo.body2" Class="asset-card-name" Style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap" title="@Name">@Name</MudText>
+            <MudText Typo="Typo.body2" Class="asset-card-name selectable" Style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap" title="@Name">@Name</MudText>
         </MudStack>
         <MudStack Row="true" Spacing="1" Wrap="Wrap.Wrap" Class="px-1">
             <MudText Typo="Typo.caption" Class="mud-text-secondary">@Type</MudText>

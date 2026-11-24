@@ -43,7 +43,7 @@ else
         <MudPaper Outlined="true" Class="pa-3 mb-3 review-source" data-source="@source.Id">
             <MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Spacing="2">
                 <MudIcon Icon="@SourceIcon(source.Kind)" />
-                <MudText Typo="Typo.h6" Class="review-source-name">@source.Name</MudText>
+                <MudText Typo="Typo.h6" Class="review-source-name selectable">@source.Name</MudText>
                 @if (source.Id != 0)
                 {
                     <LicenseBadge License="source.License" />
@@ -57,11 +57,11 @@ else
             </MudStack>
             @if (!string.IsNullOrWhiteSpace(source.Description))
             {
-                <MudText Typo="Typo.body2" Class="mt-1">@source.Description</MudText>
+                <MudText Typo="Typo.body2" Class="mt-1 selectable">@source.Description</MudText>
             }
             @if (!string.IsNullOrWhiteSpace(source.Notes))
             {
-                <MudText Typo="Typo.caption" Class="mud-text-secondary">@source.Notes</MudText>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary selectable">@source.Notes</MudText>
             }
             @if (source.Error is not null)
             {
@@ -161,7 +161,7 @@ else
                             @foreach (var file in edit.Files)
                             {
                                 <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
-                                    <MudText Typo="Typo.caption" Class="flex-grow-1" Style="overflow-wrap: anywhere">
+                                    <MudText Typo="Typo.caption" Class="flex-grow-1 selectable" Style="overflow-wrap: anywhere">
                                         @(file.Role == FileRole.Primary ? "● " : "○ ")@file.RelativePath
                                     </MudText>
                                     @if (file.Role == FileRole.Companion)

@@ -82,3 +82,41 @@ public sealed class FileDropBroker
         }
     }
 }
+
+/// <summary>A rectangle in CSS pixels, relative to the top-left corner of the page.</summary>
+public readonly record struct ChromeRect(double X, double Y, double Width, double Height);
+
+/// <summary>
+/// The desktop window's frame (spec "window-chrome", design D2): whether the app bar is the window's title bar, how much
+/// room the system caption buttons take at its right end, and the colours of those buttons.
+/// </summary>
+public interface IWindowChrome
+{
+    /// <summary>True when the app bar is the window's title bar and the system draws its caption buttons over it.</summary>
+    bool IsCustomTitleBar { get; }
+
+    /// <summary>Width of the system caption buttons in CSS pixels; 0 without a custom title bar.</summary>
+    double CaptionButtonsWidth { get; }
+
+    /// <summary>Raised when <see cref="CaptionButtonsWidth"/> changes (display scale or window size).</summary>
+    event Action? Changed;
+
+    /// <summary>Colours of the caption buttons, as CSS hex colours (<c>#rrggbb</c> or <c>#rrggbbaa</c>).</summary>
+    void SetCaptionColors(string foreground, string hoverBackground);
+
+    /// <summary>
+    /// The interactive elements of the app bar. The rest of the title bar strip moves the window; these rectangles take
+    /// clicks like the rest of the page.
+    /// </summary>
+    void SetInteractiveRegions(IReadOnlyList<ChromeRect> regions);
+}
+
+/// <summary>A host without a window frame of its own (the web dev host in a browser tab): nothing to reserve or colour.</summary>
+public sealed class NoWindowChrome : IWindowChrome
+{
+    public bool IsCustomTitleBar => false;
+    public double CaptionButtonsWidth => 0;
+    public event Action? Changed { add { } remove { } }
+    public void SetCaptionColors(string foreground, string hoverBackground) { }
+    public void SetInteractiveRegions(IReadOnlyList<ChromeRect> regions) { }
+}

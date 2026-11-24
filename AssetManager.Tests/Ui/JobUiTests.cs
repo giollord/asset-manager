@@ -74,6 +74,12 @@ public class JobUiTests : BunitContext
         Assert.Contains("7 errors", finished.Find(".job-times").TextContent);
         finished.Find(".retry-failed").Click();
         Assert.Equal([8L], _queue.Retried);
+
+        // Spec "Selectable text": the current item and the error message can be copied.
+        Assert.Contains("selectable", running.Find(".job-item").ClassList);
+        var failed = Render<JobProgressView>(p => p.Add(x => x.Job, Job(9, JobState.Failed) with { Error = "Disk full" }));
+        Assert.Equal("Disk full", failed.Find(".job-error").TextContent);
+        Assert.Contains("selectable", failed.Find(".job-error").ClassList);
     }
 
     [Fact]
@@ -81,7 +87,8 @@ public class JobUiTests : BunitContext
     {
         Render<MudBlazor.MudPopoverProvider>();
         var cut = Render<JobsIndicator>();
-        Assert.Empty(cut.FindAll(".mud-badge"));
+        // Spec "Idle app bar": no indicator and no jobs button while nothing runs.
+        Assert.Empty(cut.Markup.Trim());
 
         _hub.Publish(Job(1, JobState.Running, stage: "Scan", done: 1, total: 4));
         _hub.Publish(Job(2, JobState.Pending));
@@ -89,6 +96,6 @@ public class JobUiTests : BunitContext
 
         _hub.Finish(Job(1, JobState.Completed));
         _hub.Finish(Job(2, JobState.Completed));
-        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll(".mud-badge")));
+        cut.WaitForAssertion(() => Assert.Empty(cut.Markup.Trim()));
     }
 }
