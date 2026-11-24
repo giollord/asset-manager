@@ -42,7 +42,7 @@
   - a release job with `contents: write`, gated on build and tests, that runs `gh release create` for `v*.*.*` tags.
 
   Verify that `actionlint` (or a YAML lint) passes locally.
-- [ ] 5.2 Make the test suite pass on a clean `windows-latest` runner: push a branch, read the run, and fix tests that assume dev-machine state so they skip cleanly with a reason rather than fail. Verify that a run on the branch is green and offers the portable zip as an artifact.
+- [ ] 5.2 Make the test suite pass on a clean `windows-latest` runner, and package only for version tags (scope change from the user: pull requests and pushes run the tests only). Push a branch and read the run; fix tests that assume dev-machine state so they skip cleanly with a reason rather than fail. Verify that a pull-request run is green, runs only the `test` job, and produces no package.
 - [x] 5.3 Document the CI and release process in README (what runs on push and pull requests, how to cut a release by pushing `vX.Y.Z`, where to download the zip) and add a build status badge. Verify the documented tag command matches the workflow trigger.
 
 ## 6. Release verification

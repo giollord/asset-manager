@@ -52,13 +52,21 @@ dotnet publish AssetManager/AssetManager.csproj -c Release -f net10.0-windows10.
 
 The version also goes into the Serilog start line and into Settings → About, which shows the version, the data folder and the mode.
 
-**5. One workflow, `.github/workflows/build.yml`, on `windows-latest`.**
+**5. One workflow, `.github/workflows/build.yml`, with three jobs. Pull requests only run the tests; packaging happens only for version tags.**
 - **Triggers:** push and pull requests to `master`, tags `v*.*.*`, and `workflow_dispatch`.
-- **Toolchain:** `actions/setup-dotnet` reads `global.json`, which now pins `sdk.version` to `11.0.100` (`rollForward: latestFeature`). Then `dotnet workload install maui-windows`.
-- **Cache:** `actions/cache` covers the two `native/` download folders, keyed on the hashes of `AssetManager.AI.csproj` and `AssetManager.Processing.csproj`, so llama.cpp and FFmpeg are fetched only when their pinned versions change.
-- **Steps:** build, then `dotnet test --project AssetManager.Tests/AssetManager.Tests.csproj`, then publish. The zip is created with `Compress-Archive` and named `AssetManager-<ver>-win-x64-portable.zip`.
-- **Version:** from a tag it is the tag without the `v`. Otherwise it is `0.0.0` and the zip is named with the short SHA.
-- **Outputs:** branch and manual runs upload the zip with `actions/upload-artifact`. Tag runs create the release with `gh release create <tag> <zip> --generate-notes`, using `GITHUB_TOKEN` with `contents: write` set only on that job. The release job needs the build-and-test job, so a failed test publishes nothing.
+- **`test` (every run, `windows-latest`):**
+  - `actions/setup-dotnet` reads `global.json`, which now pins `sdk.version` to `11.0.100` (`rollForward: latestFeature`).
+  - `actions/cache` covers the two `native/` download folders, keyed on the hashes of `AssetManager.AI.csproj` and `AssetManager.Processing.csproj`, so llama.cpp and FFmpeg are fetched only when their pinned versions change.
+  - Then `dotnet test --project AssetManager.Tests/AssetManager.Tests.csproj`.
+  - No MAUI workload is installed here: the test project does not reference the MAUI app, and the install alone takes about 3.5 minutes on a hosted runner.
+- **`package` (tags only, needs `test`, `windows-latest`):**
+  - Installs the `maui-windows` workload.
+  - Runs the publish command from decision 4 with the version taken from the tag (without the `v`).
+  - Checks the package contents: required binaries and licenses present, no `.gguf` models.
+  - Zips the folder with `Compress-Archive` as `AssetManager-<version>-win-x64-portable.zip` and uploads it as an artifact.
+- **`release` (needs `package`, `ubuntu-latest`):** downloads the zip and runs `gh release create <tag> <zip> --generate-notes`, using `GITHUB_TOKEN` with `contents: write` set only on that job. A failed test or package step publishes nothing.
+- **Alternative:** packaging on every pull request, which the first version of the workflow did. That doubles the run time (about 10 instead of 4 minutes) for an artifact nobody needs. The Release-only problems it would catch are covered by the smoke test before a release (task 4.3) and by the tag run itself.
+- **Actions:** current major versions (`checkout@v7`, `setup-dotnet@v6`, `cache@v6`, `upload-artifact@v7`, `download-artifact@v8`), which run on Node 24.
 
 **6. Settings → About.** A small new section shows:
 - the version;

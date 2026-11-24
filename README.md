@@ -68,8 +68,8 @@ To use an existing catalog from a portable copy (for example the one in `%LOCALA
 
 [`.github/workflows/build.yml`](.github/workflows/build.yml) runs on GitHub Actions (`windows-latest`):
 
-- **Every push and pull request to `master`** (and manual runs from the Actions tab): restore the pinned SDK and the MAUI workload, build, run the test suite, publish the portable build, check its contents (no `.gguf` models, the AI runtime and FFmpeg with their licenses), and upload `AssetManager-0.0.0-<commit>-win-x64-portable.zip` as a workflow artifact. A failing test fails the run.
-- **A version tag** additionally publishes a GitHub Release with `AssetManager-<version>-win-x64-portable.zip`, but only if the build and tests passed:
+- **Every push and pull request to `master`** (and manual runs from the Actions tab): run the test suite with the pinned SDK. A failing test fails the run. Nothing is packaged.
+- **A version tag** runs the tests, then builds the portable package (with the MAUI workload), checks its contents (the AI runtime and FFmpeg with their licenses, no `.gguf` models), and publishes a GitHub Release with `AssetManager-<version>-win-x64-portable.zip`. Nothing is released if a test or the package check fails:
 
   ```powershell
   git tag v1.2.0

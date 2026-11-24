@@ -7,18 +7,18 @@ Defines how the app is built, tested and packaged for users: automated builds on
 ## ADDED Requirements
 
 ### Requirement: Automated build and tests
-Every push and pull request to `master` SHALL build the app and run its automated tests on Windows in GitHub Actions. The run SHALL fail when the build fails or any test fails. Tests that need locally installed AI models SHALL be skipped, not failed, in that environment.
+Every push and pull request to `master` SHALL run the automated tests on Windows in GitHub Actions, and SHALL NOT build the portable package. The run SHALL fail when the code does not compile or any test fails. Tests that need locally installed AI models SHALL be skipped, not failed, in that environment.
 
 #### Scenario: Broken change
 - **WHEN** a pull request makes a test fail
 - **THEN** the workflow run for that pull request fails and names the failing test
 
 #### Scenario: Passing change
-- **WHEN** a push to `master` builds and every test passes or is skipped
-- **THEN** the workflow run succeeds
+- **WHEN** a push to `master` compiles and every test passes or is skipped
+- **THEN** the workflow run succeeds without producing a package
 
 ### Requirement: Portable Windows package
-The workflow SHALL produce a portable package for Windows x64: one zip that, once extracted to any folder, runs `AssetManager.exe` without installing .NET, the Windows App SDK or anything else beyond the WebView2 runtime included in Windows 10 and 11. The package SHALL include the AI runtime, FFmpeg and other native components with their license files, and SHALL NOT include AI model files.
+For a version tag, the workflow SHALL produce a portable package for Windows x64: one zip that, once extracted to any folder, runs `AssetManager.exe` without installing .NET, the Windows App SDK or anything else beyond the WebView2 runtime included in Windows 10 and 11. The package SHALL include the AI runtime, FFmpeg and other native components with their license files, and SHALL NOT include AI model files.
 
 #### Scenario: Run on a clean machine
 - **WHEN** the zip is extracted on a Windows 10 or 11 x64 machine without the .NET SDK or runtime and `AssetManager.exe` is started
@@ -29,7 +29,7 @@ The workflow SHALL produce a portable package for Windows x64: one zip that, onc
 - **THEN** it contains the `llama-server` builds and FFmpeg with their licenses, and no `.gguf` model file
 
 ### Requirement: Versioned releases
-Pushing a version tag of the form `v<major>.<minor>.<patch>` SHALL build the portable package with that version and publish it as a GitHub Release named after the tag, with the zip attached. The app SHALL report that version. Builds that are not from a version tag SHALL keep the zip as a downloadable workflow artifact instead of publishing a release.
+Pushing a version tag of the form `v<major>.<minor>.<patch>` SHALL build the portable package with that version and publish it as a GitHub Release named after the tag, with the zip attached. The release SHALL be published only after the tests pass. The app SHALL report that version.
 
 #### Scenario: Tagged release
 - **WHEN** the tag `v1.2.0` is pushed and the build and tests pass
@@ -38,7 +38,3 @@ Pushing a version tag of the form `v<major>.<minor>.<patch>` SHALL build the por
 #### Scenario: Failed tagged build
 - **WHEN** a version tag is pushed and a test fails
 - **THEN** no release is published
-
-#### Scenario: Manual build
-- **WHEN** the workflow is started by hand on a branch
-- **THEN** the run offers the portable zip as an artifact and creates no release
