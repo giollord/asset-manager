@@ -90,8 +90,9 @@ public sealed class VirtualFileSystem(IEnumerable<IContainerReader> readers, IAp
     /// <param name="location">Its catalog location (volume-relative).</param>
     /// <param name="maxDepth">How many container levels may be opened; null uses the settings value.</param>
     /// <param name="ignore">Folders to skip, applied to the folder and inside every container; null skips none.</param>
+    /// <param name="opening">Called with a container's location right before it is opened (extraction can take long).</param>
     public async IAsyncEnumerable<VfsNode> WalkAsync(string localPath, Location location, int? maxDepth = null,
-        FolderIgnoreRules? ignore = null, [EnumeratorCancellation] CancellationToken ct = default)
+        FolderIgnoreRules? ignore = null, [EnumeratorCancellation] CancellationToken ct = default, Action<Location>? opening = null)
     {
         var depth = Math.Max(0, maxDepth ?? settings?.Current.MaxNestingDepth ?? 5);
         ignore ??= FolderIgnoreRules.None;
@@ -113,17 +114,18 @@ public sealed class VirtualFileSystem(IEnumerable<IContainerReader> readers, IAp
                     continue;
                 }
                 var node = new VfsNode(VfsNodeKind.File, loc, file.FullName, rel, file.Length, file.LastWriteTimeUtc);
-                await foreach (var n in VisitAsync(node, depth, ignore, ct)) yield return n;
+                await foreach (var n in VisitAsync(node, depth, ignore, opening, ct)) yield return n;
             }
             yield break;
         }
 
         var info = new FileInfo(localPath);
         var root = new VfsNode(VfsNodeKind.File, location, localPath, info.Name, info.Exists ? info.Length : 0, info.Exists ? info.LastWriteTimeUtc : null);
-        await foreach (var n in VisitAsync(root, depth, ignore, ct)) yield return n;
+        await foreach (var n in VisitAsync(root, depth, ignore, opening, ct)) yield return n;
     }
 
-    private async IAsyncEnumerable<VfsNode> VisitAsync(VfsNode node, int maxDepth, FolderIgnoreRules ignore, [EnumeratorCancellation] CancellationToken ct)
+    private async IAsyncEnumerable<VfsNode> VisitAsync(VfsNode node, int maxDepth, FolderIgnoreRules ignore, Action<Location>? opening,
+        [EnumeratorCancellation] CancellationToken ct)
     {
         var reader = ReaderFor(node.Location.FileName);
         if (reader is null)
@@ -139,6 +141,7 @@ public sealed class VirtualFileSystem(IEnumerable<IContainerReader> readers, IAp
 
         ContainerContents? contents = null;
         string? error = null;
+        opening?.Invoke(node.Location);
         try
         {
             contents = await reader.OpenAsync(node.LocalPath, ct);
@@ -178,7 +181,7 @@ public sealed class VirtualFileSystem(IEnumerable<IContainerReader> readers, IAp
                     MetaPath = e.MetaPath,
                     PreviewPath = e.PreviewPath,
                 };
-                await foreach (var n in VisitAsync(child, maxDepth, ignore, ct)) yield return n;
+                await foreach (var n in VisitAsync(child, maxDepth, ignore, opening, ct)) yield return n;
             }
         }
     }

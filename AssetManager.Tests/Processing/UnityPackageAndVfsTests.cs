@@ -88,6 +88,26 @@ public class UnityPackageAndVfsTests
     }
 
     [Fact]
+    public async Task Opening_callback_names_each_container_before_its_entries()
+    {
+        using var kit = new ProcessingKit();
+        var zip = kit.Dir.Write("bundle.zip", FixtureBuilder.Zip(
+            new FixtureFile("Unity/props.unitypackage", Package()),
+            FixtureFile.Text("License.txt", "CC0")));
+
+        // Each event: either "open:<location>" from the callback or "node:<location>" from the walk.
+        var events = new List<string>();
+        await foreach (var n in kit.Vfs.WalkAsync(zip, new(null, zip), opening: loc => events.Add("open:" + loc.Display())))
+            events.Add("node:" + n.Location.Display());
+
+        var openZip = events.IndexOf("open:" + zip);
+        var openPackage = events.IndexOf($"open:{zip} → Unity/props.unitypackage");
+        Assert.True(openZip >= 0 && openPackage > openZip, string.Join(" | ", events));
+        Assert.True(openZip < events.FindIndex(e => e.StartsWith($"node:{zip} → ")));
+        Assert.True(openPackage < events.FindIndex(e => e.StartsWith($"node:{zip} → Unity/props.unitypackage → ")));
+    }
+
+    [Fact]
     public async Task Depth_limit_stops_recursion()
     {
         using var kit = new ProcessingKit();

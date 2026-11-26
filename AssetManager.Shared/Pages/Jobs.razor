@@ -119,8 +119,9 @@
         _active = Hub.Active.ToList();
         await LoadHistoryAsync();
         await RefreshAiAsync();
-        // Elapsed times and the AI rate change without events; refresh them every second.
-        _timer = new Timer(_ => InvokeAsync(async () => { await RefreshAiAsync(); StateHasChanged(); }), null, 1000, 1000);
+        // The AI rate changes without events: refresh it every second. Job clocks tick by themselves (JobProgressView),
+        // and the page never waits for the AI status query, which can be slow while an import keeps the catalog busy.
+        _timer = new Timer(_ => InvokeAsync(Tick), null, 1000, 1000);
     }
 
     protected override async Task OnParametersSetAsync()
@@ -134,6 +135,32 @@
     private async Task RefreshAiAsync()
     {
         if (Catalog.Path is not null) _ai = await Ai.StatusAsync();
+    }
+
+    private bool _aiRefreshing;
+
+    /// <summary>Redraws now, then refreshes the AI status in the background (one refresh at a time).</summary>
+    private void Tick()
+    {
+        StateHasChanged();
+        if (_aiRefreshing) return;
+        _aiRefreshing = true;
+        _ = InvokeAsync(async () =>
+        {
+            try
+            {
+                await RefreshAiAsync();
+                StateHasChanged();
+            }
+            catch (Exception)
+            {
+                // A failed refresh keeps the last status; the next tick tries again.
+            }
+            finally
+            {
+                _aiRefreshing = false;
+            }
+        });
     }
 
     private async Task OnExpand(JobSnapshot job, bool open)
