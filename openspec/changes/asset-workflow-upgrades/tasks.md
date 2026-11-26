@@ -143,7 +143,7 @@
 ## 22. README screenshots
 
 - [x] 22.1 Build a screenshot catalog from CC0 packs only in a separate data folder, run the Debug MAUI app at 1440×900 in the dark theme, and capture `docs/screenshots/browse.png`, `details-model.png` (a model with the turntable or the 3D view), `dashboard.png` and `import-review.png` with `node tools/cdp.mjs shot` (D19). Optimize the PNGs (each under ~400 KB) and check them by eye: no personal paths, drive letters or non-redistributable art.
-- [ ] 22.2 Add a "Screenshots" block to the README after the intro and before "Download", Browse full-width and the other three below it, each with alt text; leave the logo line unchanged. Verify that the README renders with the images in a Markdown preview and on the branch's GitHub page (scenario "README on GitHub").
+- [x] 22.2 Add a "Screenshots" block to the README after the intro and before "Download", Browse full-width and the other three below it, each with alt text; leave the logo line unchanged. Verify that the README renders with the images in a Markdown preview and on the branch's GitHub page (scenario "README on GitHub").
 
 ## 23. Texture matching for model previews
 
