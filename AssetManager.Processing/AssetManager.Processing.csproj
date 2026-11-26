@@ -25,10 +25,12 @@
     Bundled FFmpeg (LGPL, shared build) used for audio/video metadata and previews (design D6).
     Pinned build from BtbN/FFmpeg-Builds; downloaded once at build time, verified by SHA-256 and kept
     (git-ignored) in native/ffmpeg. Copied to the output as ffmpeg/*.
+    Pin only a month-end autobuild (autobuild-YYYY-MM-<last day>-*): BtbN deletes daily builds after
+    about two weeks but keeps month-end builds long-term.
   -->
   <PropertyGroup>
-    <FfmpegUrl>https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-11-12-15-40/ffmpeg-n8.1.3-35-gf1acb0a266-win64-lgpl-shared-8.1.zip</FfmpegUrl>
-    <FfmpegSha256>BB6EEDD1978549C84E8DFF7B72C885DF090DB6A6EE1DE44E76C8855BABEA495C</FfmpegSha256>
+    <FfmpegUrl>https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-n8.1.3-27-g8dca1586f4-win64-lgpl-shared-8.1.zip</FfmpegUrl>
+    <FfmpegSha256>5CEF7BC48E513F3CEE7C881E8B2999D835541EDB1846C3E89443A67F8F8556AB</FfmpegSha256>
     <FfmpegDir>$(MSBuildThisFileDirectory)native/ffmpeg/</FfmpegDir>
     <FfmpegDownloadDir>$(MSBuildThisFileDirectory)obj/ffmpeg-download/</FfmpegDownloadDir>
   </PropertyGroup>
