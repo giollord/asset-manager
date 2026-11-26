@@ -23,7 +23,12 @@ public class MainLayoutTests : BunitContext
         public double CaptionButtonsWidth { get; set; } = 138.4;
         public event Action? Changed;
         public List<(string Foreground, string Hover)> Colors { get; } = [];
-        public void SetCaptionColors(string foreground, string hoverBackground) => Colors.Add((foreground, hoverBackground));
+        public void SetCaptionColors(string foreground, string hoverBackground)
+        {
+            lock (Colors) Colors.Add((foreground, hoverBackground));
+        }
+        /// <summary>Written on the renderer's thread and read on the test's, hence the lock.</summary>
+        public string? LastForeground { get { lock (Colors) return Colors.Count == 0 ? null : Colors[^1].Foreground; } }
         public void SetInteractiveRegions(IReadOnlyList<ChromeRect> regions) { }
         public void RaiseChanged() => Changed?.Invoke();
     }
@@ -99,13 +104,14 @@ public class MainLayoutTests : BunitContext
         var store = Services.GetRequiredService<IAppSettingsStore>();
         store.Update(s => s.Theme = ThemeMode.Dark);
 
-        Render<MainLayout>();
+        var cut = Render<MainLayout>();
         var dark = new MudBlazor.MudTheme().PaletteDark.AppbarText.ToString(MudBlazor.Utilities.MudColorOutputFormats.HexA);
-        Assert.Equal(dark, chrome.Colors[^1].Foreground);
+        cut.WaitForAssertion(() => Assert.Equal(dark, chrome.LastForeground));
 
+        // The settings change reaches the layout through InvokeAsync, so it may land after Update returns.
         store.Update(s => s.Theme = ThemeMode.Light);
         var light = new MudBlazor.MudTheme().PaletteLight.AppbarText.ToString(MudBlazor.Utilities.MudColorOutputFormats.HexA);
-        Assert.Equal(light, chrome.Colors[^1].Foreground);
+        cut.WaitForAssertion(() => Assert.Equal(light, chrome.LastForeground));
     }
 }
 
