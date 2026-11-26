@@ -141,6 +141,7 @@ public sealed class ImportEnricher(
             if (pending.Count > 0) progress.SetTotal(attempted.Count + pending.Count);
         }
         await ConsensusAsync(chat, await SourceIdsAsync(sessionId, ct), progress, ct);
+        await PackTexturesAsync(await SourceIdsAsync(sessionId, ct), progress, ct);
         await MarkStageAsync(sessionId, stage + 1, ct);
     }
 
@@ -436,6 +437,38 @@ public sealed class ImportEnricher(
         var chat = new StructuredChat(client, _log);
         await EnrichAssetsAsync(chat, assetIds, instruction, correction, progress, ct);
         await ConsensusAsync(chat, await WholeSourcesAsync(assetIds, ct), progress, ct);
+        await using (var db = catalog.CreateDbContext())
+        {
+            var sources = new List<long>();
+            foreach (var chunk in assetIds.Chunk(500))
+                sources.AddRange(await db.AllAssets.Where(a => chunk.Contains(a.Id)).Select(a => a.SourceId).Distinct().ToListAsync(ct));
+            await PackTexturesAsync(sources.Distinct().ToList(), progress, ct);
+        }
+    }
+
+    /// <summary>
+    /// Pack texture suggestions (spec "Pack texture suggestions", design D20) after the AI item pass: no AI request, only
+    /// what the source's models already use. A failure only leaves a warning.
+    /// </summary>
+    public async Task PackTexturesAsync(IReadOnlyList<long> sourceIds, IJobProgress progress, CancellationToken ct)
+    {
+        if (textures is null || !Settings().TextureMatchEnabled) return;
+        foreach (var sourceId in sourceIds)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var made = await textures.SuggestFromPackAsync(sourceId, ct);
+                if (made == 0) continue;
+                _log.LogInformation("Source {Source}: {Count} pack texture suggestions", sourceId, made);
+                catalog.NotifyContentChanged();
+            }
+            catch (Exception e) when (e is InvalidOperationException or IOException or DbUpdateException)
+            {
+                _log.LogWarning("Pack texture suggestions for source {Source} failed: {Error}", sourceId, e.Message);
+                progress.Warn($"pack-textures:{sourceId}", null, $"Pack textures could not be suggested: {e.Message}");
+            }
+        }
     }
 
     /// <summary>The sources all of whose assets are in <paramref name="assetIds"/> (re-enriching a whole source runs the consensus step).</summary>

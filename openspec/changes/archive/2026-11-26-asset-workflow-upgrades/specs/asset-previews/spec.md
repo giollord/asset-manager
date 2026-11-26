@@ -58,6 +58,25 @@ An AI choice below the texture-match threshold, but at or above the suggestion t
 - **WHEN** the AI picks a candidate with confidence 0.5
 - **THEN** nothing is attached, the previews stay untextured, and the details drawer offers the candidate as a suggestion
 
+### Requirement: Pack texture suggestions
+After a source's AI item pass, with no AI request, a texture SHALL be a pack texture for a material name when at least 3 of the source's models use it as that material's base colour, and at least half of the models with that material textured do. Each model of the source with that material still untextured (and with texture coordinates) SHALL get the pack texture as a suggestion, with the share of models as its confidence. Models with user-edited textures SHALL get none.
+
+#### Scenario: Pack texture suggestion
+- **GIVEN** a farm pack where `Barn`, `Silo` and `Windmill` use `Textures/Color 2.png` for material `Material`
+- **WHEN** the AI item pass of the source finishes and `Tractor` and `Well` still have `Material` untextured
+- **THEN** both get `Color 2.png` as a suggestion ("used for "Material" by 3 of 3 models in this pack"), and the filter "texture suggestions" shows them
+
+#### Scenario: No clear pack texture
+- **WHEN** only 2 models use a texture for a material name
+- **THEN** no pack suggestion is made
+
+### Requirement: Applying texture suggestions in bulk
+Browse SHALL offer the model-issue filter "texture suggestions". A bulk action "Apply texture suggestions" SHALL attach every suggestion of the selected models as a user choice, and re-render those models in a job.
+
+#### Scenario: Apply in bulk
+- **WHEN** the user selects the suggested models and runs "Apply texture suggestions"
+- **THEN** the textures are attached with origin "user", the models' textures are marked as user-edited, and they are re-rendered
+
 ### Requirement: Reviewing a model's textures
 A model's details drawer SHALL list its textures, each with:
 - material and slot

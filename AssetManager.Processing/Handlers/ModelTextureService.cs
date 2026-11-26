@@ -71,6 +71,34 @@ public sealed class ModelTextureService(CatalogStore catalog, ILocationResolver 
         await RerenderAsync(assetId, ct);
     }
 
+    /// <summary>
+    /// Attaches every texture suggestion of the given assets (bulk "Apply texture suggestions"; the job re-renders them
+    /// afterwards). Assets without suggestions are left alone. Returns the models changed and the number of textures attached.
+    /// </summary>
+    public async Task<(IReadOnlyList<long> Models, int Textures)> AttachSuggestionsAsync(IReadOnlyList<long> assetIds, CancellationToken ct = default)
+    {
+        var changed = new List<long>();
+        var attached = 0;
+        foreach (var chunk in assetIds.Chunk(200))
+        {
+            await using var db = catalog.CreateDbContext();
+            foreach (var asset in await db.AllAssets.Where(a => chunk.Contains(a.Id) && a.Type == AssetType.Model3D).ToListAsync(ct))
+            {
+                var suggestions = asset.Model?.TextureSuggestions.ToList() ?? [];
+                if (suggestions.Count == 0) continue;
+                foreach (var s in suggestions)
+                {
+                    await matcher.AttachAsync(asset, s.Material, s.FileId, CompanionOrigin.User, null, ct);
+                    attached++;
+                }
+                asset.UserEdited |= EditedFields.Textures;
+                changed.Add(asset.Id);
+            }
+            await db.SaveChangesAsync(ct);
+        }
+        return (changed, attached);
+    }
+
     public async Task DismissSuggestionAsync(long assetId, string material, CancellationToken ct = default)
     {
         await using var db = catalog.CreateDbContext();

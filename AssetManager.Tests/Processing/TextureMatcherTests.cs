@@ -200,4 +200,92 @@ public class TextureMatcherTests
         Assert.True(TextureMatcher.IsNormalMapColor(normal.ToByteArray(MagickFormat.Png)));
         Assert.False(TextureMatcher.IsNormalMapColor(wood.ToByteArray(MagickFormat.Png)));
     }
+
+    /// <summary>Five farm models whose material "Material" references a palette that is not there, and the pack's palette.</summary>
+    private static Task<(ImportKit Kit, TextureMatcher Matcher, CandidateRenderer Renderer, string Pack)> FarmAsync() => SetUpAsync((pack, dir) =>
+    {
+        foreach (var name in new[] { "Barn", "Silo", "Windmill", "Tractor", "Well" })
+            Write(dir, $"Pack/Models/{name}.fbx", Box(new BoxOptions { Material = "Material" }), "fbx");
+        Png(Path.Combine(pack, "Textures", "Color 2.png"), "#c08040");
+        Png(Path.Combine(pack, "Textures", "Grass_Tile.png"), "#40a040");
+    });
+
+    private static async Task AttachAsync(ImportKit kit, TextureMatcher matcher, string model, string texture)
+    {
+        await using var db = kit.Catalog.Db();
+        var asset = await db.Assets.Include(a => a.Files).SingleAsync(a => a.Name == model, Ct);
+        var file = (await matcher.SourceTexturesAsync(asset.Id, Ct)).Single(c => c.FileName == texture);
+        await matcher.AttachAsync(asset, "Material", file.FileId, CompanionOrigin.Ai, null, Ct);
+        await db.SaveChangesAsync(Ct);
+    }
+
+    /// <summary>Scenario "Pack texture suggestion".</summary>
+    [Fact]
+    public async Task Texture_most_models_use_for_a_material_is_suggested_for_the_rest()
+    {
+        var (kit, matcher, _, _) = await FarmAsync();
+        await using var _ = kit;
+        foreach (var name in new[] { "Barn", "Silo", "Windmill" }) await AttachAsync(kit, matcher, name, "Color 2.png");
+
+        var made = await matcher.SuggestFromPackAsync((await ModelAsync(kit, "Barn")).SourceId, Ct);
+
+        Assert.Equal(2, made);
+        foreach (var name in new[] { "Tractor", "Well" })
+        {
+            var s = Assert.Single((await ModelAsync(kit, name)).Model!.TextureSuggestions);
+            Assert.Equal(("Material", "Color 2.png", 1.0), (s.Material, s.RelativePath[(s.RelativePath.LastIndexOf('/') + 1)..], s.Confidence));
+            Assert.Contains("3 of 3 models", s.Reason);
+        }
+        Assert.Empty((await ModelAsync(kit, "Barn")).Model?.TextureSuggestions ?? []);
+
+        var search = new AssetManager.Data.Search.AssetSearchService(kit.Store);
+        var found = await search.SearchAsync(new AssetManager.Core.Search.SearchQuery { TextureSuggestions = true }, 0, 10, Ct);
+        Assert.Equal(["Tractor", "Well"], found.Items.Select(i => i.Name).Order());
+    }
+
+    /// <summary>Scenario "No clear pack texture".</summary>
+    [Fact]
+    public async Task No_suggestion_without_a_clear_majority_or_enough_models()
+    {
+        var (kit, matcher, _, _) = await FarmAsync();
+        await using var _ = kit;
+        await AttachAsync(kit, matcher, "Barn", "Color 2.png");
+        await AttachAsync(kit, matcher, "Silo", "Color 2.png");
+        var source = (await ModelAsync(kit, "Barn")).SourceId;
+
+        Assert.Equal(0, await matcher.SuggestFromPackAsync(source, Ct)); // only 2 models
+
+        await AttachAsync(kit, matcher, "Windmill", "Grass_Tile.png");
+        await AttachAsync(kit, matcher, "Tractor", "Grass_Tile.png");
+        await AttachAsync(kit, matcher, "Well", "Grass_Tile.png"); // 2 vs 3 of 5: Grass_Tile is 60 % but nothing is left untextured
+        Assert.Equal(0, await matcher.SuggestFromPackAsync(source, Ct));
+    }
+
+    [Fact]
+    public async Task User_edited_models_get_no_pack_suggestion_and_suggestions_apply_in_bulk()
+    {
+        var (kit, matcher, _, _) = await FarmAsync();
+        await using var _ = kit;
+        foreach (var name in new[] { "Barn", "Silo", "Windmill" }) await AttachAsync(kit, matcher, name, "Color 2.png");
+        await using (var db = kit.Catalog.Db())
+        {
+            var well = await db.Assets.SingleAsync(a => a.Name == "Well", Ct);
+            well.UserEdited |= EditedFields.Textures;
+            await db.SaveChangesAsync(Ct);
+        }
+
+        Assert.Equal(1, await matcher.SuggestFromPackAsync((await ModelAsync(kit, "Barn")).SourceId, Ct));
+        Assert.Empty((await ModelAsync(kit, "Well")).Model?.TextureSuggestions ?? []);
+
+        var service = new ModelTextureService(kit.Store, kit.Processing.Resolver, kit.Previews, matcher);
+        var ids = (await Task.WhenAll(new[] { "Tractor", "Well", "Barn" }.Select(n => ModelAsync(kit, n)))).Select(a => a.Id).ToList();
+        var (models, textures) = await service.AttachSuggestionsAsync(ids, Ct);
+
+        var tractor = await ModelAsync(kit, "Tractor");
+        Assert.Equal([tractor.Id], models);
+        Assert.Equal(1, textures);
+        Assert.Empty(tractor.Model!.TextureSuggestions);
+        Assert.True(tractor.UserEdited.HasFlag(EditedFields.Textures));
+        Assert.Contains(tractor.Files, f => (f.FileName, f.Material, f.Slot, f.Origin) == ("Color 2.png", "Material", "map", CompanionOrigin.User));
+    }
 }

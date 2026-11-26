@@ -48,6 +48,9 @@ public sealed record SearchQuery
     /// <summary>Models with a texture the AI matched (design D20), for reviewing the matches.</summary>
     public bool TexturesMatchedByAi { get; init; }
 
+    /// <summary>Models with texture suggestions to review (design D20).</summary>
+    public bool TextureSuggestions { get; init; }
+
     public AiStatus? AiStatus { get; init; }
 
     public bool FavoritesOnly { get; init; }

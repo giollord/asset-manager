@@ -29,6 +29,9 @@ public interface ITextureMatcher
     Task<IReadOnlyList<byte[]>> RenderCandidatesAsync(long assetId, MaterialToMatch match, CancellationToken ct = default);
 
     Task AttachAsync(Asset asset, string material, long fileId, CompanionOrigin origin, string? missingReference, CancellationToken ct = default);
+
+    /// <summary>Suggests a source's pack textures for its still untextured models; returns the number of suggestions.</summary>
+    Task<int> SuggestFromPackAsync(long sourceId, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -296,10 +299,90 @@ public sealed class TextureMatcher(CatalogStore catalog, ILocationResolver resol
         }
     }
 
+    /// <summary>A pack texture needs at least this many models using it for the material…</summary>
+    public const int PackMinModels = 3;
+
+    /// <summary>…and this share of the models that have the material textured.</summary>
+    public const double PackMinShare = 0.5;
+
+    /// <summary>
+    /// Pack texture suggestions (spec "Pack texture suggestions", design D20): when most models of a source that have a
+    /// material textured use the same texture for it, that texture is suggested for the material on the source's
+    /// models that still have it untextured. Returns the number of suggestions made.
+    /// </summary>
+    public async Task<int> SuggestFromPackAsync(long sourceId, CancellationToken ct = default)
+    {
+        await using var db = catalog.CreateDbContext();
+        var models = await db.AllAssets.Include(a => a.Files).ThenInclude(f => f.Stored)
+            .Where(a => a.SourceId == sourceId && a.Type == AssetType.Model3D).ToListAsync(ct);
+        var packs = PackTextures(models);
+        if (packs.Count == 0) return 0;
+
+        // Suggest the texture's own file (a texture asset) rather than another model's companion row, when there is one.
+        var paths = packs.Values.Select(p => p.RelativePath).ToList();
+        var primaries = (await db.AssetFiles.IgnoreQueryFilters().AsNoTracking()
+                .Where(f => f.Asset.SourceId == sourceId && f.Role == FileRole.Primary).Select(f => new { f.Id, f.RelativePath }).ToListAsync(ct))
+            .GroupBy(f => f.RelativePath.Replace('\\', '/'), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().Id, StringComparer.OrdinalIgnoreCase);
+
+        var made = 0;
+        foreach (var model in models)
+        {
+            if (model.UserEdited.HasFlag(EditedFields.Textures) || model.PrimaryFile is null) continue;
+            if (!model.Files.Any(f => f.Role == FileRole.Primary)) continue;
+            List<(string Material, string? Missing)> materials;
+            try
+            {
+                materials = await WithItemAsync(model, ct, item => Task.Run(() => UnmatchedMaterials(item), ct));
+            }
+            catch (Exception e) when (e is OriginalUnavailableException or IOException or Assimp.AssimpException)
+            {
+                continue;
+            }
+            foreach (var (material, _) in materials)
+            {
+                if (!packs.TryGetValue(TextureNames.Key(material), out var pack)) continue;
+                if (model.Model?.TextureSuggestions.Any(s => s.Material == material && s.Confidence >= pack.Share) == true) continue;
+                var fileId = primaries.GetValueOrDefault(pack.RelativePath, pack.FileId);
+                Suggest(model, new TextureSuggestion(material, fileId, pack.RelativePath, pack.Share,
+                    $"used for \"{material}\" by {pack.Models} of {pack.Textured} models in this pack"));
+                made++;
+            }
+        }
+        await db.SaveChangesAsync(ct);
+        return made;
+    }
+
+    /// <summary>The texture most models use for a material name, when it clears <see cref="PackMinModels"/> and <see cref="PackMinShare"/>.</summary>
+    internal sealed record PackTexture(long FileId, string RelativePath, int Models, int Textured, double Share);
+
+    /// <summary>Pack textures by material name key (<see cref="TextureNames.Key"/>).</summary>
+    internal static Dictionary<string, PackTexture> PackTextures(IEnumerable<Asset> models)
+    {
+        var uses = models.SelectMany(m => m.Files
+                .Where(f => f.Role == FileRole.Companion && f.Slot == "map" && f.Material is { Length: > 0 } && ModelHandler.IsTextureExtension(f.Extension))
+                .Select(f => (Model: m.Id, Key: TextureNames.Key(f.Material!), Path: f.RelativePath.Replace('\\', '/'), f.Id))
+                .DistinctBy(u => (u.Key, u.Path.ToLowerInvariant())))
+            .Where(u => u.Key.Length > 0)
+            .ToList();
+        var result = new Dictionary<string, PackTexture>();
+        foreach (var byKey in uses.GroupBy(u => u.Key))
+        {
+            var textured = byKey.Select(u => u.Model).Distinct().Count();
+            var top = byKey.GroupBy(u => u.Path, StringComparer.OrdinalIgnoreCase)
+                .Select(g => (Uses: g, Models: g.Select(u => u.Model).Distinct().Count()))
+                .OrderByDescending(x => x.Models).ThenBy(x => x.Uses.Key, StringComparer.OrdinalIgnoreCase).First();
+            var share = (double)top.Models / textured;
+            if (top.Models >= PackMinModels && share >= PackMinShare)
+                result[byKey.Key] = new PackTexture(top.Uses.First().Id, top.Uses.Key, top.Models, textured, share);
+        }
+        return result;
+    }
+
     /// <summary>Stores (or replaces) the suggestion for a material on <paramref name="asset"/>, in memory.</summary>
     public static void Suggest(Asset asset, TextureSuggestion suggestion)
     {
-        if (asset.Model is not { } m) return;
+        var m = asset.Model ?? new ModelMetadata();
         asset.Model = m with { TextureSuggestions = m.TextureSuggestions.Where(s => s.Material != suggestion.Material).Append(suggestion).ToList() };
     }
 

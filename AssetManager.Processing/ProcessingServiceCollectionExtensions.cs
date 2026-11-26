@@ -59,6 +59,7 @@ public static class ProcessingServiceCollectionExtensions
         services.TryAddSingleton<Import.StagedRegrouping>();
         services.TryAddSingleton<Import.ImportStager>();
         services.AddSingleton<Core.Jobs.IJobHandler, Jobs.RegeneratePreviewsJob>();
+        services.AddSingleton<Core.Jobs.IJobHandler, Jobs.ApplyTextureSuggestionsJob>();
         services.AddSingleton<Core.Jobs.IJobHandler, Jobs.RedetectSpritesJob>();
         services.TryAddSingleton<Sync.RescanService>();
         services.AddSingleton<Core.Jobs.IJobHandler, Sync.RescanJob>();

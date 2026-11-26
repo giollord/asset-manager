@@ -153,6 +153,7 @@
 - [x] 23.4 `TextureJudge` (AI) and wiring into `ModelEnrichment` before the orientation judgment, with one re-render; the reverse-order check; the text-only fallback; Settings → AI controls. Tests with a scripted chat: scenarios "Two materials", "Atlas shared by a pack", "Unsure choice", "None fits" and "Order changes the answer".
 - [x] 23.5 Details drawer "Textures" section (origin chips, detach, apply or dismiss a suggestion, choose a texture) with re-render and `EditedFields.Textures`; the Browse model-issue filter. bUnit tests: scenarios "Choose a texture" and "Wrong AI match".
 - [x] 23.6 Check by hand on Quaternius "Textured Stylized Trees" (no references) and Humble "Low Poly Farm" (missing references) from `ASSETMANAGER_SAMPLES`: the models are textured after import, the AI matches are marked, and detaching one re-renders. Record the thresholds in design.md under Open Questions.
+- [x] 23.7 Pack texture suggestions: `TextureMatcher.SuggestFromPackAsync` after the AI item pass (import and re-enrichment), the Browse filter "texture suggestions" and the bulk job "Apply texture suggestions". Tests: scenarios "Pack texture suggestion", "No clear pack texture" and "Apply in bulk". Check by hand on Low Poly Farm.
 
 ## Workflow follow-up
 

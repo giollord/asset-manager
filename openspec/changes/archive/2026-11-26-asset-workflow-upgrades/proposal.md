@@ -70,7 +70,7 @@ The AI also tags each asset on its own. When most of a pack is clearly "pixel ar
 - `asset-catalog`: source-level tags and the "source" tag origin; favourite, rating and notes on assets.
 - `ai-enrichment`: tag consensus across a source; suggested tag vocabulary; sprite sheet and pixel-art hints in item output; picking a model's texture from rendered candidates.
 - `asset-search`: search by image; filters for favourites, minimum rating and notes; "find similar" moves to the card context menu; turntable inspection of stored model renders.
-- `asset-previews`: models get textures matched from their source when their materials reference none or missing ones; the user can review, change and detach them.
+- `asset-previews`: models get textures matched from their source when their materials reference none or missing ones; the user can review, change and detach them. A texture most of a pack's models use for a material is suggested for the models still missing it, and suggestions can be applied in bulk.
 - `asset-export`: drag out, Unity-aware export with `.meta` files and dependencies, credits report; the original viewer falls back to the turntable when a model's original is unavailable.
 - `catalog-stats`: license audit view.
 - `app-shell`: keyboard navigation; the "fully offline" rule allows the opt-in update check; whole-card click selection; card text not selectable; card context menu.

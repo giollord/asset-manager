@@ -47,6 +47,8 @@ public class TextureJudgeTests
             asset.TexturesMissing = false;
             return Task.CompletedTask;
         }
+
+        public Task<int> SuggestFromPackAsync(long sourceId, CancellationToken ct = default) => Task.FromResult(0);
     }
 
     private sealed class CountingRerenderer : IPreviewRerenderer

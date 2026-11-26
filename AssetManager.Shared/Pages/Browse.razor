@@ -161,6 +161,8 @@
         <MudCheckBox T="bool" Value="_query.TexturesMissing" ValueChanged="v => SetQuery(_query with { TexturesMissing = v })" Label="Textures missing" Dense="true" Size="Size.Small" />
         <MudCheckBox T="bool" Value="_query.TexturesMatchedByAi" ValueChanged="v => SetQuery(_query with { TexturesMatchedByAi = v })" Label="Textures matched by AI"
                      Dense="true" Size="Size.Small" id="filter-textures-ai" />
+        <MudCheckBox T="bool" Value="_query.TextureSuggestions" ValueChanged="v => SetQuery(_query with { TextureSuggestions = v })" Label="Texture suggestions"
+                     Dense="true" Size="Size.Small" id="filter-texture-suggestions" />
 
         <MudSelect T="SearchSort" Label="Sort" Value="_query.Sort" ValueChanged="v => SetQuery(_query with { Sort = v })" Margin="Margin.Dense" Dense="true" Class="mt-2" id="sort">
             <MudSelectItem T="SearchSort" Value="SearchSort.Relevance">Relevance</MudSelectItem>

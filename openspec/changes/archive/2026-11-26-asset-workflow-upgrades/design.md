@@ -250,6 +250,7 @@ Models are often shipped with textures their materials don't reference, or with 
 
   Companions are saved in their own DB context before the re-render, because `PreviewService` reads the files from the catalog.
 - **Review:** a "Textures" section in the details drawer lists companions (material, slot, file, thumbnail, origin). The user can detach a texture, apply or dismiss a suggestion, or choose a texture from the source's images for a material. Any of these sets `EditedFields.Textures` and re-renders.
+- **Pack textures:** the check by hand showed the AI misses many models whose pack uses one palette for everything (`Color 2.png` in Low Poly Farm). After the item pass, `TextureMatcher.SuggestFromPackAsync` counts, per material name key, which base colour the source's models use. A texture used by at least 3 models and by at least half of those with that material textured is suggested (not attached) for the source's models where that material is still untextured. It needs no AI and no renders. Browse filter "texture suggestions" (a SQLite JSON query on the model metadata) and the bulk job "Apply texture suggestions" let the user review and apply them at once.
 - **Settings → AI:** `TextureMatchEnabled` (on), `TextureMatchThreshold` and `TextureSuggestThreshold`.
 - **Cost:** 5 small renders and 2 AI calls per material that needs matching. Models without evidence cost nothing, so untextured stylized packs (Kenney) are left alone.
 
@@ -300,3 +301,4 @@ One EF migration (`AddWorkflowFeatures`) covers:
   - Thresholds stay at 0.7 to attach and 0.4 to suggest: every attachment above 0.7 that was checked looked right.
   - Fixed during the check: an OBJ's `.mtl`, claimed by its name, was sent to the renderer as a base-colour texture, and 90 OBJ previews failed ("The source image could not be decoded"). Only image files are used as textures now.
   - Cost: the AI item pass ran at 11–14 items a minute, against about 35 without texture questions.
+  - **Pack textures (23.7), same catalog:** after re-enriching the Windmill models, each farm copy got `Color 2.png` suggested (share 0.97 and 0.94) for 49 of its 61–62 untextured models; the trees got none. "Apply texture suggestions" on the 98 models attached and re-rendered them in 30 s, all correctly coloured on a sheet of renders. The 13 left per copy use other material names (`MainMaterial…`, `Foilage_…`) with fewer than 3 textured models each.

@@ -22,6 +22,8 @@ public static class JobTypes
     public const string DescribeCollection = "ai.describe-collection";
     /// <summary>Re-detect sprite sheets and pixel art of images; payload <see cref="AssetsPayload"/> (null = all images).</summary>
     public const string RedetectSprites = "assets.redetect-sprites";
+    /// <summary>Attach the texture suggestions of models and re-render them; payload <see cref="AssetsPayload"/>.</summary>
+    public const string ApplyTextureSuggestions = "assets.apply-texture-suggestions";
 }
 
 /// <summary>Payload of jobs over a set of assets; null ids means "all that apply" (e.g. all outdated previews).</summary>
@@ -49,6 +51,29 @@ public sealed class RegeneratePreviewsJob(PreviewService previews) : IJobHandler
         }), ct);
         foreach (var s in result.Skipped) context.Progress.Fail(s.AssetId.ToString(), s.Name, s.Reason);
         context.Progress.SetSummary(new { regenerated = result.Regenerated, skipped = result.Skipped.Count });
+    }
+}
+
+/// <summary>Bulk "Apply texture suggestions" (design D20): attaches each model's suggested textures, then re-renders those models.</summary>
+public sealed class ApplyTextureSuggestionsJob(ModelTextureService textures, PreviewService previews) : IJobHandler
+{
+    public string Type => JobTypes.ApplyTextureSuggestions;
+
+    public JobPool Pool => JobPool.Render;
+
+    public async Task RunAsync(JobContext context, CancellationToken ct)
+    {
+        var ids = context.Payload<AssetsPayload>().AssetIds ?? [];
+        var (models, attached) = await textures.AttachSuggestionsAsync(ids, ct);
+        context.Progress.SetStage("Re-rendering textured models", 0, 1, models.Count);
+        var done = 0;
+        var result = await previews.RegenerateAsync(models.ToArray(), new SyncProgress(n =>
+        {
+            context.Progress.Advance(n - done);
+            done = n;
+        }), ct);
+        foreach (var s in result.Skipped) context.Progress.Fail(s.AssetId.ToString(), s.Name, s.Reason);
+        context.Progress.SetSummary(new { models = models.Count, textures = attached, skipped = result.Skipped.Count });
     }
 }
 

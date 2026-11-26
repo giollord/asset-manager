@@ -134,6 +134,13 @@ public sealed class AssetSearchService(CatalogStore catalog, IVolumeService? vol
         if (query.OrientationNotVerified) q = q.Where(a => a.Type == AssetType.Model3D && !a.OrientationVerified);
         if (query.TexturesMissing) q = q.Where(a => a.TexturesMissing);
         if (query.TexturesMatchedByAi) q = q.Where(a => a.Files.Any(f => f.Origin == CompanionOrigin.Ai));
+        if (query.TextureSuggestions)
+        {
+            // Model metadata is a JSON column: ask SQLite's JSON functions.
+            var suggested = db.Database.SqlQueryRaw<long>(
+                "SELECT Id AS Value FROM Assets WHERE Model IS NOT NULL AND json_array_length(Model, '$.textureSuggestions') > 0");
+            q = q.Where(a => suggested.Contains(a.Id));
+        }
         if (query.AiStatus is { } status) q = q.Where(a => a.AiStatus == status);
         if (query.FavoritesOnly) q = q.Where(a => a.Favorite);
         if (query.MinRating > 0)

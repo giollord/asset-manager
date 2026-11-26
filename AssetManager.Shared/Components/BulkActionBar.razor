@@ -49,6 +49,7 @@
         <MudMenuItem Icon="@Icons.Material.Filled.Refresh" OnClick="() => ReimportAsync(true)" Class="bulk-reimport-ai">Re-import and re-enrich</MudMenuItem>
         <MudMenuItem Icon="@Icons.Material.Filled.AutoAwesome" OnClick="ReenrichAsync" Class="bulk-reenrich">Re-enrich with AI</MudMenuItem>
         <MudMenuItem Icon="@Icons.Material.Filled.Image" OnClick="RegenerateAsync" Class="bulk-regenerate">Regenerate previews</MudMenuItem>
+        <MudMenuItem Icon="@Icons.Material.Filled.Texture" OnClick="ApplyTextureSuggestionsAsync" Class="bulk-apply-textures">Apply texture suggestions</MudMenuItem>
         <MudDivider />
         <MudMenuItem Icon="@Icons.Material.Filled.Archive" OnClick="StoreAsync" Class="bulk-store">Store originals in catalog</MudMenuItem>
         <MudMenuItem Icon="@Icons.Material.Outlined.Unarchive" OnClick="UnstoreAsync" Class="bulk-unstore">Remove stored copies</MudMenuItem>
@@ -137,6 +138,10 @@
 
     private Task RegenerateAsync() =>
         Run(() => Jobs.EnqueueAsync(JobTypes.RegeneratePreviews, $"Regenerate previews of {Assets(Selection.Count)}", new AssetsPayload(Ids)), "Preview regeneration started.");
+
+    private Task ApplyTextureSuggestionsAsync() =>
+        Run(() => Jobs.EnqueueAsync(JobTypes.ApplyTextureSuggestions, $"Apply texture suggestions to {Assets(Selection.Count)}", new AssetsPayload(Ids)),
+            "Attaching the suggested textures; the models are re-rendered when the job finishes.");
 
     private Task StoreAsync() =>
         Run(() => Jobs.EnqueueAsync(JobTypes.StoreOriginals, $"Store {Assets(Selection.Count)}", new AssetsPayload(Ids)), "Storing the originals in the catalog…");
