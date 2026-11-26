@@ -69,6 +69,7 @@ public sealed class ImportKit : IAsyncDisposable
             new CatalogPreviewRerenderer(store, kit.Previews))
         {
             Chat = () => chat is null || chatAvailable?.Invoke() == false ? null : new GatedChatClient(chat, kit.Ai),
+            LoadModel = _ => Task.CompletedTask, // the fake model "loads" by itself (chatAvailable)
             Modalities = () => modalities ?? new AiModalities(true, false),
             Parallelism = () => parallelism,
             Settings = () => kit.AppSettings,

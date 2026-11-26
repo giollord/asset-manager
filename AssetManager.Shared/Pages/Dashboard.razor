@@ -5,6 +5,7 @@
 @inject ICatalogStatsService Stats
 @inject AssetManager.Data.CatalogStore Catalog
 @inject NavigationManager Nav
+@inject IServiceProvider ServiceProvider
 
 <PageTitle>Dashboard</PageTitle>
 
@@ -88,7 +89,9 @@ else
     protected override async Task OnInitializedAsync()
     {
         Catalog.ContentChanged += OnCatalogChanged;
-        await LoadAsync();
+        // The AI and resumed jobs wait until the first page shows its numbers (design D12).
+        using (((AssetManager.Core.StartupSignals?)ServiceProvider.GetService(typeof(AssetManager.Core.StartupSignals)))?.FirstLoad() ?? default)
+            await LoadAsync();
     }
 
     private async Task LoadAsync()

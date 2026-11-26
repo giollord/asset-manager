@@ -47,16 +47,24 @@ public sealed record TextureDecision(string Material, TextureCandidate? Chosen, 
 /// </summary>
 public static class TextureJudge
 {
+    /// <summary>The last line of the text that is the same for every material.</summary>
+    public const string FixedEnd = "About this model and its candidates:";
+
     public static List<ChatMessage> BuildPrompt(Asset asset, MaterialToMatch match, IReadOnlyList<byte[]> renders, IReadOnlyList<int> order)
     {
         var lines = order.Select((c, i) => $"Candidate {i + 1}: {match.Candidates[c].RelativePath}");
+        // Fixed rules first, the model's own lines last: every material of a pack starts with the same text, which
+        // llama-server reuses from its cache (fast-portable-startup design D8).
         var text = $"""
-            The 3D model "{asset.Name}" has a material "{match.Material}" that has no texture{(match.MissingReference is null ? "" : $" (it refers to \"{match.MissingReference}\", which the pack does not contain)")}.
-            The first image shows the model as it is. Each following image shows the model with one candidate texture of the same pack applied to that material:
-            {string.Join("\n", lines)}
+            A 3D model has a material that has no texture.
+            The first image shows the model as it is. Each following image shows the model with one candidate texture of the same pack applied to that material.
             Which candidate makes the model look as its artist intended: details that follow the model's shape (planks along the boards, a face on the head, bark on the trunk)?
             A wrong texture looks smeared, stretched, noisy or random on the model. Answer 0 when no candidate fits.
             confidence is how sure you are, from 0 to 1.
+            {FixedEnd}
+            The model is "{asset.Name}"; the material is "{match.Material}"{(match.MissingReference is null ? "" : $" (it refers to \"{match.MissingReference}\", which the pack does not contain)")}.
+            The candidates:
+            {string.Join("\n", lines)}
             """;
         var contents = new List<AIContent> { new TextContent(text), new TextContent("The model as it is:"), new DataContent(renders[0], "image/jpeg") };
         for (var i = 0; i < order.Count; i++)

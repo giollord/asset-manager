@@ -11,7 +11,7 @@ public static class MauiProgram
     public static MauiApp CreateMauiApp()
     {
         // First: everything below (logs, settings, catalog, models, browser profile) lives in the data folder.
-        var location = AppDataLocation.Resolve(AppContext.BaseDirectory);
+        var location = AppDataLocation.Resolve(AppPaths.InstallFolder);
         AppPaths.Use(location);
         Environment.SetEnvironmentVariable("WEBVIEW2_USER_DATA_FOLDER", AppPaths.WebView);
 

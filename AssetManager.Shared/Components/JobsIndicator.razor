@@ -3,21 +3,19 @@
 @inject IProgressHub Hub
 @inject NavigationManager Nav
 
-@* App-bar indicator (design D8): active job count and combined progress; opens a quick view that links to the Jobs page.
-   Nothing at all while no job runs (spec "Global progress indicator"); the Jobs page stays in the navigation menu. *@
+@* App-bar indicator (design D8): a chip with the active job count and combined progress that opens the Jobs page;
+   hovering lists the jobs. Nothing at all while no job runs (spec "Global progress indicator"). *@
 @if (_active.Count > 0)
 {
-    <MudMenu AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" id="jobs-indicator">
-        <ActivatorContent>
-            <MudTooltip Text="@($"{_active.Count} active job{(_active.Count == 1 ? "" : "s")}")">
-                <MudBadge Content="@_active.Count" Color="Color.Secondary" Overlap="true" Class="mx-2">
-                    <MudProgressCircular Color="Color.Inherit" Size="Size.Small" StrokeWidth="4"
-                                         Value="@(Combined * 100)" Indeterminate="@(Combined == 0)" aria-label="Active jobs" />
-                </MudBadge>
-            </MudTooltip>
-        </ActivatorContent>
-        <ChildContent>
-            <div class="pa-3" style="width: 380px; max-width: 90vw" id="jobs-quick-view">
+    <div class="d-inline-block" @onmouseenter="() => SetOpen(true)" @onmouseleave="() => SetOpen(false)">
+        <MudChip T="string" id="jobs-indicator" Class="jobs-chip mx-2" Variant="Variant.Outlined" Color="Color.Inherit" Size="Size.Small"
+                 Icon="@Icons.Material.Filled.Sync" OnClick="@(() => Nav.NavigateTo("jobs"))" aria-label="Active jobs: open the Jobs page">
+            @Label
+        </MudChip>
+        @* A popover in the app's own panel colors (a tooltip is light gray, which makes the purple progress unreadable). *@
+        <MudPopover Open="_open" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Paper="true" Elevation="8" Class="pa-3"
+                    Style="width: 380px; max-width: 90vw">
+            <div id="jobs-quick-view">
                 @foreach (var job in _active.Take(6))
                 {
                     <div class="mb-3"><JobProgressView Job="job" Compact="true" /></div>
@@ -26,17 +24,31 @@
                 {
                     <MudText Typo="Typo.caption">and @(_active.Count - 6) more</MudText>
                 }
-                <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => Nav.NavigateTo("jobs"))">Open Jobs page</MudButton>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">Click to open the Jobs page.</MudText>
             </div>
-        </ChildContent>
-    </MudMenu>
+        </MudPopover>
+    </div>
 }
 
 @code {
     private List<JobSnapshot> _active = [];
+    private bool _open;
+    private System.Threading.Timer? _tick;
+
+    /// <summary>While the quick view is open, re-renders every second so elapsed times move between progress updates.</summary>
+    private void SetOpen(bool open)
+    {
+        _open = open;
+        _tick?.Dispose();
+        _tick = open ? new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 1000, 1000) : null;
+    }
 
     /// <summary>Average progress of the active jobs whose progress is known.</summary>
     private double Combined => _active.Select(j => j.Fraction).OfType<double>().DefaultIfEmpty(0).Average();
+
+    /// <summary>"2 jobs · 45%"; the percentage only once some job reports progress.</summary>
+    private string Label => $"{_active.Count} job{(_active.Count == 1 ? "" : "s")}" +
+                            (_active.Any(j => j.Fraction is not null) ? $" · {Combined * 100:0}%" : "");
 
     protected override void OnInitialized()
     {
@@ -50,5 +62,9 @@
         StateHasChanged();
     });
 
-    public void Dispose() => Hub.Changed -= OnChanged;
+    public void Dispose()
+    {
+        Hub.Changed -= OnChanged;
+        _tick?.Dispose();
+    }
 }

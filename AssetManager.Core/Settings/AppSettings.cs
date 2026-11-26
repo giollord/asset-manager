@@ -31,8 +31,20 @@ public sealed class AppSettings
     /// <summary>The AI depth a new import starts with (the import wizard can change it per import).</summary>
     public Domain.AiDepth DefaultAiDepth { get; set; } = Domain.AiDepth.Full;
 
+    /// <summary>
+    /// Load the AI models right after the window is ready. Off by default: they load when first needed (an AI import
+    /// step, semantic or image search), so a session without AI work never spends the time, memory and disk on them.
+    /// </summary>
+    public bool AiLoadAtStartup { get; set; }
+
     /// <summary>Extraction cache size limit in MB; least-recently-used entries are evicted above it.</summary>
-    public long CacheMaxSizeMb { get; set; } = 20 * 1024;
+    public long CacheMaxSizeMb { get; set; } = 4 * 1024;
+
+    /// <summary>
+    /// Where files extracted from archives and packages go; null means <see cref="AppPaths.DefaultCache"/> on the system
+    /// drive. Takes effect at the next start.
+    /// </summary>
+    public string? CacheFolder { get; set; }
 
     /// <summary>Cache entries not used for this many days are evicted.</summary>
     public int CacheMaxAgeDays { get; set; } = 14;
@@ -100,11 +112,39 @@ public sealed class AppSettings
 /// </summary>
 public static class AppPaths
 {
+    /// <summary>
+    /// The folder that holds the app's exe and what ships beside it (the <c>portable</c> marker, <c>llama/</c>,
+    /// <c>ffmpeg/</c>). In a single-file build <see cref="AppContext.BaseDirectory"/> is the folder the bundle was
+    /// extracted to, not this one (design D1).
+    /// </summary>
+    public static string InstallFolder { get; } = ResolveInstallFolder();
+
+    private static string ResolveInstallFolder()
+    {
+        var exe = Environment.ProcessPath;
+        // Run as "dotnet app.dll" the process is the dotnet host; its folder is not the app's.
+        if (exe is null || Path.GetFileNameWithoutExtension(exe).Equals("dotnet", StringComparison.OrdinalIgnoreCase)) return AppContext.BaseDirectory;
+        return Path.GetDirectoryName(exe) ?? AppContext.BaseDirectory;
+    }
+
     public static AppDataLocation Location { get; private set; } = AppDataLocation.Default;
 
     public static string Root { get; set; } = AppDataLocation.Default.Root;
 
+    /// <summary>The extraction cache inside the data folder, where older versions kept it.</summary>
     public static string Cache => Path.Combine(Root, "cache");
+
+    /// <summary>
+    /// The default extraction cache: on the system drive (usually an internal SSD), even for a portable copy. Unpacking
+    /// an archive writes thousands of small files; on a USB hard drive that is ~10 files/s with the drive 100% busy, on
+    /// an SSD it is instant. The cache is disposable, so keeping it off the portable folder loses nothing
+    /// (fast-portable-startup design D14).
+    /// </summary>
+    public static string DefaultCache =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AssetManager", "cache");
+
+    /// <summary>The cache folder in use for these settings.</summary>
+    public static string CacheFor(AppSettings settings) => string.IsNullOrWhiteSpace(settings.CacheFolder) ? DefaultCache : settings.CacheFolder;
     public static string Models => Path.Combine(Root, "models");
     public static string Temp => Path.Combine(Root, "temp");
     /// <summary>Files staged for the clipboard or other short-lived exports.</summary>
@@ -216,6 +256,7 @@ public sealed class JsonAppSettingsStore : IAppSettingsStore
         if (s.MmprojPath is { } mmproj) s.MmprojPath = map(mmproj);
         if (s.EmbeddingModelPath is { } embedding) s.EmbeddingModelPath = map(embedding);
         if (s.BackupFolder is { } backups) s.BackupFolder = map(backups);
+        if (s.CacheFolder is { } cache) s.CacheFolder = map(cache);
     }
 
     private static void TrySave(string path, AppSettings settings)

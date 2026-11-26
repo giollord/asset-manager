@@ -59,6 +59,13 @@ public class OrientationJudgeTests
         Assert.Equal(6, message.Contents.OfType<DataContent>().Count());
         Assert.Contains("most likely first): 4, 6, 5, 3, 2, 1", message.Text);
         Assert.Equal(6, OrientationJudge.SplitProbe(probe.Bytes).Count());
+
+        // Design D8: every model's prompt starts with the same fixed text; the name and ranking come after it.
+        var natural = OrientationJudge.BuildPrompt(asset, probe).Single().Text;
+        var fixedEnd = natural.IndexOf(OrientationJudge.FixedEnd, StringComparison.Ordinal) + OrientationJudge.FixedEnd.Length;
+        Assert.Equal(natural[..fixedEnd], message.Text[..fixedEnd]);
+        Assert.DoesNotContain(asset.Name, natural[..fixedEnd]);
+        Assert.True(natural.IndexOf(asset.Name, StringComparison.Ordinal) > fixedEnd);
     }
 
     private const string ItemAnswer = """{"items":[{"index":1,"description":"A tree.","type":"model3_d","tags":["tree"],"colors":[],"style":[],"is_game_asset":true}]}""";

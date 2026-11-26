@@ -107,6 +107,29 @@ public class ItemPassTests
         Assert.Equal("RIFF"u8.ToArray(), audio.Data.ToArray()[..4]);
     }
 
+    /// <summary>Design D8: requests of one source start with the same text, so llama-server reuses it from its cache.</summary>
+    [Fact]
+    public async Task Requests_of_one_source_share_the_prompt_start()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var context = new ItemContext("Balls", "Colored balls.", "Use the tag 'ball'.", ["ball", "toy"]);
+        ItemInput Ball(int i) => Item($"ball{i}", AssetType.Image, Blob(PreviewKind.Thumbnail, Webp(MagickColors.Red)));
+        var eight = Assert.Single(ItemPass.Plan(Enumerable.Range(0, 8).Select(Ball).ToList(), VisionOnly));
+        var three = Assert.Single(ItemPass.Plan(Enumerable.Range(0, 3).Select(Ball).ToList(), VisionOnly));
+        var a = (await ItemPass.BuildPromptAsync(eight, context, Options, ct))[0].Text;
+        var b = (await ItemPass.BuildPromptAsync(three, context, Options, ct))[0].Text;
+
+        var shared = new System.Text.StringBuilder();
+        ItemPass.AppendSharedPrefix(shared, context);
+        var prefix = shared.ToString();
+        Assert.StartsWith(prefix, a);
+        Assert.StartsWith(prefix, b);
+        Assert.Contains("Instruction from the user (follow it): Use the tag 'ball'.", prefix);
+        Assert.Contains(SuggestedTags.PromptLine(["ball", "toy"]), prefix); // the prefix ends after the suggested tags
+        Assert.DoesNotContain("8", prefix);
+        Assert.DoesNotContain("ball0", prefix);
+    }
+
     [Fact]
     public async Task Sheet_and_model_requests_carry_one_composed_image()
     {

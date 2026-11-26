@@ -1,9 +1,12 @@
+using AssetManager.AI.Runtime;
 using AssetManager.Core.Domain;
 using AssetManager.Core.Jobs;
 using AssetManager.Data;
 using AssetManager.Processing.Import;
 using AssetManager.Processing.Jobs;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace AssetManager.AI.Import;
 
@@ -14,7 +17,7 @@ public sealed record ImportPayload(long SessionId);
 /// pass, AI item pass, and commit (stage 6, run by the confirm job). The session is ready for review after the
 /// previews; the user may confirm while the AI stages still run.
 /// </summary>
-public sealed class ImportJob(CatalogStore catalog, ImportStager stager, ImportEnricher enricher) : IJobHandler
+public sealed class ImportJob(CatalogStore catalog, ImportStager stager, ImportEnricher enricher, ILogger<ImportJob>? logger = null) : IJobHandler
 {
     public const string JobType = "import";
     public const int StageCount = 6;
@@ -38,8 +41,12 @@ public sealed class ImportJob(CatalogStore catalog, ImportStager stager, ImportE
         catalog.NotifyContentChanged();
 
         if (await StateAsync(id, ct) is ImportSessionState.Cancelled) return;
-        await enricher.PackPassAsync(id, p, 3, StageCount, ct);
-        await enricher.ItemPassAsync(id, p, 4, StageCount, ct);
+        using (var timings = AiTimings.Collect())
+        {
+            await enricher.PackPassAsync(id, p, 3, StageCount, ct);
+            await enricher.ItemPassAsync(id, p, 4, StageCount, ct);
+            if (timings.Totals.Requests > 0) (logger ?? (ILogger)NullLogger.Instance).LogInformation("Import {Id} AI: {Timings}", id, timings.Totals);
+        }
 
         await using (var db = catalog.CreateDbContext())
         {
@@ -60,7 +67,7 @@ public sealed class ImportJob(CatalogStore catalog, ImportStager stager, ImportE
 }
 
 /// <summary>AI enrichment of selected assets ("ai.enrich"): re-enrichment after a re-import and AI corrections.</summary>
-public sealed class EnrichAssetsJob(ImportEnricher enricher) : IJobHandler
+public sealed class EnrichAssetsJob(ImportEnricher enricher, ILogger<EnrichAssetsJob>? logger = null) : IJobHandler
 {
     public string Type => JobTypes.Enrich;
 
@@ -70,7 +77,11 @@ public sealed class EnrichAssetsJob(ImportEnricher enricher) : IJobHandler
     {
         var payload = context.Payload<EnrichPayload>();
         var ids = payload.AssetIds.Where(id => context.Includes(id.ToString())).ToList();
-        await enricher.EnrichSelectionAsync(ids, payload.Instruction, payload.Correction, context.Progress, ct);
+        using (var timings = AiTimings.Collect())
+        {
+            await enricher.EnrichSelectionAsync(ids, payload.Instruction, payload.Correction, context.Progress, ct);
+            if (timings.Totals.Requests > 0) (logger ?? (ILogger)NullLogger.Instance).LogInformation("AI enrichment of {Count} assets: {Timings}", ids.Count, timings.Totals);
+        }
         context.Progress.SetSummary(new { assets = ids.Count });
     }
 }

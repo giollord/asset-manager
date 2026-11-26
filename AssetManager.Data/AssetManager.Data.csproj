@@ -21,7 +21,7 @@
   <ItemGroup>
     <!-- sqlite-vec 0.1.9 loadable extension (MIT), loaded per connection by SqliteVecInterceptor. -->
     <None Include="native/win-x64/vec0.dll" Link="vec0.dll" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="native/win-x64/sqlite-vec.LICENSE-MIT.txt" Link="licenses/sqlite-vec.LICENSE-MIT.txt" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="native/win-x64/sqlite-vec.LICENSE-MIT.txt" Link="licenses/sqlite-vec.LICENSE-MIT.txt" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>
 
 </Project>

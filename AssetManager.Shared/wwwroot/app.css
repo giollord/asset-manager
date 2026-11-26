@@ -168,3 +168,8 @@ body { user-select: none; }
     box-shadow: var(--mud-elevation-4);
     pointer-events: none;
 }
+
+/* Jobs chip in the app bar: its sync icon turns while jobs run. */
+.jobs-chip .mud-chip-icon { animation: jobs-spin 2s linear infinite; }
+@keyframes jobs-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .jobs-chip .mud-chip-icon { animation: none; } }

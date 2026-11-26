@@ -36,6 +36,9 @@ public sealed class ImportEnricher(
     /// <summary>The chat client to use; null when no model is ready. Tests replace it.</summary>
     public Func<Microsoft.Extensions.AI.IChatClient?> Chat { get; init; } = () => queue.Chat;
 
+    /// <summary>Loads the configured chat model when it is not running (design D16; tests replace it).</summary>
+    public Func<CancellationToken, Task> LoadModel { get; init; } = ct => runtime.EnsureChatAsync(ct);
+
     /// <summary>How many AI requests to run at once: the chat server's slots. Tests replace it.</summary>
     public Func<int> Parallelism { get; init; } = () => runtime.Chat.Parallel;
 
@@ -370,13 +373,15 @@ public sealed class ImportEnricher(
     public TimeSpan ModelStartTimeout { get; init; } = TimeSpan.FromMinutes(5);
 
     /// <summary>
-    /// Waits while a configured chat model is not up yet: jobs resumed at app start run before the AI runtime starts,
-    /// and must not take "no chat client" for "no model installed". Returns at once without a configured model.
+    /// Loads the configured chat model if it is not running yet (models load when first needed, design D16) and waits
+    /// for it, so a job does not take "no chat client" for "no model installed". Returns at once without a configured
+    /// model, and when the model failed to load.
     /// </summary>
     public async Task WaitForModelAsync(IJobProgress progress, CancellationToken ct)
     {
         if (Chat() is not null || !runtime.ChatConfigured) return;
-        progress.SetCurrentItem("Waiting for the AI model to start...");
+        progress.SetCurrentItem("Loading the AI model...");
+        await LoadModel(ct);
         var deadline = DateTime.UtcNow + ModelStartTimeout;
         while (Chat() is null && runtime.ChatConfigured && !runtime.ChatFailed && DateTime.UtcNow < deadline)
             await Task.Delay(250, ct);

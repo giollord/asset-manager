@@ -26,7 +26,9 @@ public static class AiServiceCollectionExtensions
             var settings = sp.GetRequiredService<Core.Settings.IAppSettingsStore>();
             return new Enrichment.EmbeddingService(sp.GetRequiredService<Data.CatalogStore>(), sp.GetRequiredService<Core.Search.IVectorIndex>(),
                 () => runtime.Embeddings is { } g ? new Enrichment.EmbeddingModel(g, Path.GetFileName(settings.Current.EmbeddingModelPath ?? "embedding")) : null,
-                sp.GetService<Microsoft.Extensions.Logging.ILogger<Enrichment.EmbeddingService>>());
+                sp.GetService<Microsoft.Extensions.Logging.ILogger<Enrichment.EmbeddingService>>(),
+                configured: () => runtime.EmbeddingsConfigured && !runtime.EmbeddingsFailed,
+                ensureLoaded: runtime.EnsureEmbeddingsAsync);
         });
         services.TryAddSingleton<Enrichment.ImageQueryCache>();
         services.TryAddSingleton<Enrichment.ImageQueryService>();

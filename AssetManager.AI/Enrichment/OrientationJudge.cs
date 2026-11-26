@@ -37,19 +37,26 @@ public static class OrientationJudge
     /// The probe tiles as separate images, presented in <paramref name="order"/> (order[k-1] is the probe candidate
     /// shown as "Candidate k"). The geometric ranking is passed as a hint in the shown numbering.
     /// </summary>
+    /// <summary>The last line of the text that is the same for every model.</summary>
+    public const string FixedEnd = "About this model:";
+
     public static List<ChatMessage> BuildPrompt(Asset asset, PreviewBlob probe, IReadOnlyList<int>? order = null)
     {
         order ??= NaturalOrder;
         var shownOf = order.Select((candidate, i) => (candidate, shown: i + 1)).ToDictionary(x => x.candidate, x => x.shown);
         var ranking = asset.Model?.ProbeRanking is { Count: > 0 } r ? string.Join(", ", r.Where(shownOf.ContainsKey).Select(c => shownOf[c])) : "none";
+        // Fixed rules first, the model's own lines last: every model of a pack starts with the same text, which
+        // llama-server reuses from its cache (fast-portable-startup design D8).
         var text = $"""
-            The images show the same 3D model "{asset.Name}" in 6 candidate orientations, each preceded by its number.
+            The images show the same 3D model in 6 candidate orientations, each preceded by its number.
             Which candidate shows it upright, the way it would stand in a game world (characters and trees standing on their feet or base, buildings on their foundation, vehicles on their wheels)?
             Upside-down and lying candidates are wrong.
-            A geometric heuristic ranks the candidates (most likely first): {ranking}. It is only a hint; trust what you see.
             Answer 0 when the object has no natural up direction (a flat floor tile, a rock, a sphere, an abstract shape).
             yaw_fix is an optional extra turn around the vertical axis so the front faces the viewer; use 0 when unsure.
             confidence is how sure you are, from 0 to 1.
+            {FixedEnd}
+            The model is "{asset.Name}".
+            A geometric heuristic ranks the candidates (most likely first): {ranking}. It is only a hint; trust what you see.
             """;
         var tiles = SplitProbe(probe.Bytes).ToDictionary(t => t.Label, t => t.Jpeg);
         var contents = new List<AIContent> { new TextContent(text) };

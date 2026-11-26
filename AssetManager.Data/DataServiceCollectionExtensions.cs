@@ -37,7 +37,8 @@ public static class DataServiceCollectionExtensions
         services.TryAddSingleton<Jobs.ProgressHub>();
         services.TryAddSingleton<Core.Jobs.IProgressHub>(sp => sp.GetRequiredService<Jobs.ProgressHub>());
         services.TryAddSingleton<Jobs.JobQueue>(sp => new Jobs.JobQueue(sp.GetRequiredService<CatalogStore>(), () => sp.GetServices<Core.Jobs.IJobHandler>(),
-            sp.GetRequiredService<Jobs.ProgressHub>(), sp.GetService<Microsoft.Extensions.Logging.ILogger<Jobs.JobQueue>>()));
+            sp.GetRequiredService<Jobs.ProgressHub>(), sp.GetService<Microsoft.Extensions.Logging.ILogger<Jobs.JobQueue>>(),
+            signals: sp.GetService<Core.StartupSignals>()));
         services.TryAddSingleton<Core.Jobs.IJobQueue>(sp => sp.GetRequiredService<Jobs.JobQueue>());
         services.AddSingleton<IStartupTask, Jobs.JobQueueStartupTask>();
         services.TryAddSingleton<Services.CatalogBackupService>(sp => new Services.CatalogBackupService(sp.GetRequiredService<CatalogStore>(),

@@ -10,6 +10,89 @@ public class CatalogStatsTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
+    /// <summary>Records the thread every catalog query runs on.</summary>
+    private sealed class QueryThreads : Microsoft.EntityFrameworkCore.Diagnostics.DbCommandInterceptor
+    {
+        public System.Collections.Concurrent.ConcurrentBag<int> Seen { get; } = [];
+
+        public override System.Data.Common.DbDataReader ReaderExecuted(System.Data.Common.DbCommand command,
+            Microsoft.EntityFrameworkCore.Diagnostics.CommandExecutedEventData eventData, System.Data.Common.DbDataReader result)
+        {
+            Seen.Add(Environment.CurrentManagedThreadId);
+            return result;
+        }
+
+        public override ValueTask<System.Data.Common.DbDataReader> ReaderExecutedAsync(System.Data.Common.DbCommand command,
+            Microsoft.EntityFrameworkCore.Diagnostics.CommandExecutedEventData eventData, System.Data.Common.DbDataReader result, CancellationToken cancellationToken = default)
+        {
+            Seen.Add(Environment.CurrentManagedThreadId);
+            return ValueTask.FromResult(result);
+        }
+    }
+
+    /// <summary>Runs work on a dedicated thread with a synchronization context, like the app's UI thread.</summary>
+    private sealed class UiThread : SynchronizationContext, IDisposable
+    {
+        private readonly System.Collections.Concurrent.BlockingCollection<(SendOrPostCallback, object?)> _queue = new();
+        private readonly Thread _thread;
+
+        public UiThread()
+        {
+            _thread = new Thread(() =>
+            {
+                SetSynchronizationContext(this);
+                foreach (var (callback, state) in _queue.GetConsumingEnumerable()) callback(state);
+            }) { IsBackground = true };
+            _thread.Start();
+        }
+
+        public int ThreadId => _thread.ManagedThreadId;
+
+        public override void Post(SendOrPostCallback d, object? state) => _queue.Add((d, state));
+
+        public Task<T> RunAsync<T>(Func<Task<T>> work)
+        {
+            var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Post(async _ =>
+            {
+                try { tcs.SetResult(await work()); }
+                catch (Exception e) { tcs.SetException(e); }
+            }, null);
+            return tcs.Task;
+        }
+
+        public void Dispose() => _queue.CompleteAdding();
+    }
+
+    /// <summary>Design D13: the Dashboard's numbers are computed off the UI thread, unless a test turns that off.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Stats_are_computed_off_the_calling_ui_thread(bool onThreadPool)
+    {
+        using var dir = AssetManager.Tests.Fixtures.FixtureBuilder.TempDir();
+        var threads = new QueryThreads();
+        var store = new AssetManager.Data.CatalogStore(interceptors: [threads]);
+        await store.OpenAsync(Path.Combine(dir.Path, "catalog.amdb"), Ct);
+        try
+        {
+            var stats = new CatalogStatsService(store, new AssetSearchService(store)) { ComputeOnThreadPool = onThreadPool };
+            using var ui = new UiThread();
+            threads.Seen.Clear();
+
+            var assets = await ui.RunAsync(async () => (await stats.GetAsync()).Assets + (await stats.LicenseAuditAsync()).Count * 0);
+
+            Assert.Equal(0, assets);
+            Assert.NotEmpty(threads.Seen);
+            if (onThreadPool) Assert.DoesNotContain(ui.ThreadId, threads.Seen);
+            else Assert.Contains(ui.ThreadId, threads.Seen);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        }
+    }
+
     [Fact]
     public async Task Totals_shown()
     {

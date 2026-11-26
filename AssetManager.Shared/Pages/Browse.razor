@@ -19,6 +19,7 @@
 @inject AssetManager.Core.Platform.IDragOutService DragOut
 @inject AssetManager.Core.Platform.DragOutState DragOutState
 @inject ImageQueryCache ImageQueries
+@inject IServiceProvider ServiceProvider
 
 <PageTitle>Browse</PageTitle>
 
@@ -261,19 +262,32 @@
     /// <summary>The assets selected in the grid (the bulk action bar works on these).</summary>
     public IReadOnlyCollection<long> Selected => _selected;
 
-    protected override async Task OnInitializedAsync()
+    private bool _filterOptionsLoaded;
+
+    protected override void OnInitialized()
     {
         Catalog.ContentChanged += OnCatalogChanged;
         DragOutState.Selection = _selected; // a drag of a selected card carries the whole selection
-        await LoadFilterOptionsAsync();
     }
 
     protected override async Task OnParametersSetAsync()
     {
+        // The URL's query is applied before anything is awaited: the filter options load off the UI thread
+        // (design D13), and the grid's first render must already use the right query and sort.
+        // On the first visit the AI and resumed jobs wait until the grid and filters have loaded (design D12).
+        using var firstLoad = _filterOptionsLoaded ? default
+            : ((AssetManager.Core.StartupSignals?)ServiceProvider.GetService(typeof(AssetManager.Core.StartupSignals)))?.FirstLoad() ?? default;
         var query = SearchQuery.FromToken(Token);
-        if (query == _query) return;
-        _query = query;
-        await ApplyQueryAsync();
+        if (query != _query)
+        {
+            _query = query;
+            await ApplyQueryAsync();
+        }
+        if (!_filterOptionsLoaded)
+        {
+            _filterOptionsLoaded = true;
+            await LoadFilterOptionsAsync();
+        }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)

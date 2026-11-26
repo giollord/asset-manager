@@ -88,16 +88,10 @@ public static class ItemPass
 
     public static async Task<List<ChatMessage>> BuildPromptAsync(ItemRequest request, ItemContext context, PreviewOptions options, CancellationToken ct = default)
     {
+        // Order matters for speed (design D8): the text up to the pack context is identical for every request of one
+        // source, so llama-server reuses it from its cache; only what follows (the items and their media) is new.
         var sb = new StringBuilder();
-        sb.AppendLine(request.Items.Count == 1 ? "Enrich this game asset." : $"Enrich these {request.Items.Count} game assets.");
-        if (context.PackName is not null) sb.AppendLine($"They come from the pack \"{context.PackName}\".");
-        if (!string.IsNullOrWhiteSpace(context.PackDescription)) sb.AppendLine($"Pack description: {context.PackDescription.Trim()}");
-        if (!string.IsNullOrWhiteSpace(context.Instruction)) sb.AppendLine($"Instruction from the user (follow it): {context.Instruction.Trim()}");
-        sb.AppendLine("Describe what each item actually shows or sounds like. Names and paths may be in any language: translate their meaning, answer in English.");
-        sb.AppendLine("Tags are separate English words or short phrases about content, material, theme and use; never copy a file name into tags.");
-        if (context.SuggestedTags is { Count: > 0 } suggested) sb.AppendLine(SuggestedTags.PromptLine(suggested));
-        sb.AppendLine("Type \"animation\" is a motion clip (e.g. a walk cycle or an attack), even when the file shows a stand-in character; describe the motion.");
-        sb.AppendLine();
+        AppendSharedPrefix(sb, context);
 
         var contents = new List<AIContent>();
         switch (request.Kind)
@@ -114,6 +108,7 @@ public static class ItemPass
                 sb.AppendLine("The audio clip is the first seconds of the sound.");
                 break;
         }
+        sb.AppendLine(request.Items.Count == 1 ? "Enrich this game asset." : $"Enrich these {request.Items.Count} game assets.");
         sb.AppendLine();
         foreach (var item in request.Items)
         {
@@ -143,6 +138,22 @@ public static class ItemPass
                 break;
         }
         return [new ChatMessage(ChatRole.User, contents)];
+    }
+
+    /// <summary>
+    /// The start of every item prompt for one source: fixed rules first, then the source's own context (pack, user
+    /// instruction, suggested tags). It does not depend on the request, so the server's prompt cache reuses it (design D8).
+    /// </summary>
+    public static void AppendSharedPrefix(StringBuilder sb, ItemContext context)
+    {
+        sb.AppendLine("Describe what each item actually shows or sounds like. Names and paths may be in any language: translate their meaning, answer in English.");
+        sb.AppendLine("Tags are separate English words or short phrases about content, material, theme and use; never copy a file name into tags.");
+        sb.AppendLine("Type \"animation\" is a motion clip (e.g. a walk cycle or an attack), even when the file shows a stand-in character; describe the motion.");
+        if (context.PackName is not null) sb.AppendLine($"The items come from the pack \"{context.PackName}\".");
+        if (!string.IsNullOrWhiteSpace(context.PackDescription)) sb.AppendLine($"Pack description: {context.PackDescription.Trim()}");
+        if (!string.IsNullOrWhiteSpace(context.Instruction)) sb.AppendLine($"Instruction from the user (follow it): {context.Instruction.Trim()}");
+        if (context.SuggestedTags is { Count: > 0 } suggested) sb.AppendLine(SuggestedTags.PromptLine(suggested));
+        sb.AppendLine();
     }
 
     public static async Task<IReadOnlyList<ItemOutcome>> RunAsync(StructuredChat chat, ItemRequest request, ItemContext context, PreviewOptions options, CancellationToken ct = default)

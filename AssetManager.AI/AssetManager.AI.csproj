@@ -19,8 +19,9 @@
   </PropertyGroup>
 
   <!--
-    Bundled llama.cpp server (MIT), design D7: Vulkan build for GPUs and a CPU build, pinned release, downloaded once at
-    build time, verified by SHA-256 and kept (git-ignored) in native/llama/{vulkan,cpu}. Copied to the output as llama/*.
+    Bundled llama.cpp server (MIT), design D7: the Vulkan build, pinned release, downloaded once at build time, verified by
+    SHA-256 and kept (git-ignored) in native/llama. It also carries the CPU backends: CPU mode runs the same server without
+    the GPU (fast-portable-startup design D4). Copied to the output as llama/*.
   -->
   <PropertyGroup>
     <LlamaRelease>b12141</LlamaRelease>
@@ -31,10 +32,9 @@
 
   <ItemGroup>
     <LlamaBuild Include="vulkan" Zip="llama-$(LlamaRelease)-bin-win-vulkan-x64.zip" Sha256="0C261A82B5B42F8974CEBA249B215C98FB75A3CC5720A16F7B2BFC1AD91CFB14" />
-    <LlamaBuild Include="cpu" Zip="llama-$(LlamaRelease)-bin-win-cpu-x64.zip" Sha256="22D1102219A8F97287272D06E615B9A3F3CFC3BDBE5FB327E4B9C1EEC042933C" />
   </ItemGroup>
 
-  <Target Name="FetchLlama" Condition="!Exists('$(LlamaDir)$(LlamaRelease).txt')">
+  <Target Name="FetchLlama" Condition="!Exists('$(LlamaDir)$(LlamaRelease).txt') Or !Exists('$(LlamaDir)llama-server.exe')">
     <DownloadFile SourceUrl="$(LlamaBaseUrl)%(LlamaBuild.Zip)" DestinationFolder="$(LlamaDownloadDir)" DestinationFileName="%(LlamaBuild.Identity).zip" Retries="2" />
     <VerifyFileHash File="$(LlamaDownloadDir)%(LlamaBuild.Identity).zip" Hash="%(LlamaBuild.Sha256)" Algorithm="SHA256" />
     <RemoveDir Directories="$(LlamaDir)" />
@@ -45,7 +45,7 @@
                    Exclude="$(LlamaDownloadDir)%(LlamaBuild.Identity)/**/llama-*-impl.dll" Build="%(LlamaBuild.Identity)" />
       <_LlamaFiles Include="$(LlamaDownloadDir)%(LlamaBuild.Identity)/**/llama-server-impl.dll" Build="%(LlamaBuild.Identity)" />
     </ItemGroup>
-    <Copy SourceFiles="@(_LlamaFiles)" DestinationFolder="$(LlamaDir)%(_LlamaFiles.Build)/" />
+    <Copy SourceFiles="@(_LlamaFiles)" DestinationFolder="$(LlamaDir)" />
     <WriteLinesToFile File="$(LlamaDir)$(LlamaRelease).txt" Lines="llama.cpp $(LlamaRelease) (MIT)" Overwrite="true" />
     <RemoveDir Directories="$(LlamaDownloadDir)" />
   </Target>
@@ -53,9 +53,9 @@
   <Target Name="IncludeLlama" BeforeTargets="AssignTargetPaths" DependsOnTargets="FetchLlama">
     <ItemGroup>
       <_LlamaOut Include="$(LlamaDir)**/*" />
-      <None Include="@(_LlamaOut)" Link="llama/%(_LlamaOut.RecursiveDir)%(_LlamaOut.Filename)%(_LlamaOut.Extension)" CopyToOutputDirectory="PreserveNewest" />
+      <None Include="@(_LlamaOut)" Link="llama/%(_LlamaOut.RecursiveDir)%(_LlamaOut.Filename)%(_LlamaOut.Extension)" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
       <!-- The release zips carry only third-party licenses; llama.cpp's own MIT license is checked in (from the same tag). -->
-      <None Include="$(MSBuildThisFileDirectory)licenses/llama.cpp.LICENSE.txt" Link="llama/LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
+      <None Include="$(MSBuildThisFileDirectory)licenses/llama.cpp.LICENSE.txt" Link="llama/LICENSE.txt" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     </ItemGroup>
   </Target>
 

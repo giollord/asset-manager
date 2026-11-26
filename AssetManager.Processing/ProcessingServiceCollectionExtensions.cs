@@ -24,7 +24,7 @@ public static class ProcessingServiceCollectionExtensions
         services.TryAddSingleton(sp =>
         {
             var settings = sp.GetRequiredService<IAppSettingsStore>();
-            return new ExtractionCache(AppPaths.Cache,
+            return new ExtractionCache(AppPaths.CacheFor(settings.Current),
                 () => new CacheLimits(settings.Current.CacheMaxSizeMb * 1024 * 1024, TimeSpan.FromDays(settings.Current.CacheMaxAgeDays)),
                 sp.GetService<ILogger<ExtractionCache>>());
         });
@@ -99,14 +99,23 @@ public sealed class VolumeChangeStartupTask(IVolumeService volumes, Data.Catalog
     }
 }
 
-internal sealed class CacheCleanupStartupTask(ExtractionCache cache, ILogger<CacheCleanupStartupTask>? logger = null) : IStartupTask
+/// <summary>
+/// Evicts old cache entries after the AI runtime has loaded its models (or a few minutes at most), at background
+/// priority: listing thousands of cache folders must not compete with the window or the model load (design D5).
+/// </summary>
+public sealed class CacheCleanupStartupTask(ExtractionCache cache, ILogger<CacheCleanupStartupTask>? logger = null, Core.StartupSignals? signals = null) : IStartupTask
 {
     public int Order => 20;
 
+    /// <summary>The longest eviction waits for the AI runtime.</summary>
+    public static readonly TimeSpan MaxWait = TimeSpan.FromMinutes(5);
+
     public Task RunAsync(CancellationToken ct)
     {
-        _ = Task.Run(() =>
+        _ = Task.Run(async () =>
         {
+            if (signals is not null) await Task.WhenAny(signals.AiSettled, Task.Delay(MaxWait, ct));
+            using var background = Core.Jobs.BackgroundIo.Enter(); // design D11: never compete with the window's reads
             try { cache.Evict(); }
             catch (Exception e) { logger?.LogWarning(e, "Cache cleanup failed"); }
         }, ct);

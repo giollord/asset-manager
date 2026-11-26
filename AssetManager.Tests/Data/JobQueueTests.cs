@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using AssetManager.Core;
 using AssetManager.Core.Domain;
 using AssetManager.Core.Jobs;
 using AssetManager.Data.Jobs;
@@ -72,6 +73,58 @@ public class JobQueueTests
         Assert.Equal(5, handler.Processed.Count); // the finished job was not run again
         await using var read = c.Db();
         Assert.Equal(2, (await read.Jobs.SingleAsync(j => j.Id == 2, TestContext.Current.CancellationToken)).Attempts);
+    }
+
+    [Fact]
+    public async Task Interrupted_jobs_wait_for_the_window_but_new_jobs_run_at_once()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var c = await TestCatalog.CreateAsync();
+        await using (var db = c.Db())
+        {
+            db.Jobs.Add(new Job { Type = "test.items", Title = "interrupted", PayloadJson = """{"count":2,"fail":[]}""", State = JobState.Running, CreatedAt = DateTime.UtcNow, Attempts = 1 });
+            await db.SaveChangesAsync(ct);
+        }
+        var signals = new StartupSignals();
+        var handler = new CountingHandler();
+        var hub = new ProgressHub();
+        await using var queue = new JobQueue(c.Store, [handler], hub, signals: signals) { ResumeSettle = TimeSpan.Zero, ResumeFallback = TimeSpan.FromMinutes(5) };
+
+        await queue.StartAsync(ct);
+        Assert.Equal(JobState.Pending, hub.Get(1)?.State); // listed as waiting at once
+
+        // A job the user starts now runs before the window is ready.
+        var fresh = await queue.EnqueueAsync("test.items", "new", new CountingHandler.Payload(1, []), ct: ct);
+        Assert.Equal(JobState.Completed, (await queue.WaitAsync(fresh, ct)).State);
+        Assert.False(queue.Resumed.IsCompleted);
+        Assert.DoesNotContain(handler.Processed, p => p.Job == 1);
+
+        signals.SignalWindowReady();
+        await Task.Delay(200, ct);
+        Assert.False(queue.Resumed.IsCompleted); // the AI models are still loading
+
+        signals.SignalAiSettled();
+        Assert.Equal(JobState.Completed, (await queue.WaitAsync(1, ct)).State);
+        Assert.True(queue.Resumed.IsCompleted);
+        Assert.Equal(2, handler.Processed.Count(p => p.Job == 1));
+    }
+
+    [Fact]
+    public async Task Interrupted_jobs_resume_after_the_fallback_without_a_window()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var c = await TestCatalog.CreateAsync();
+        await using (var db = c.Db())
+        {
+            db.Jobs.Add(new Job { Type = "test.items", Title = "pending", PayloadJson = """{"count":1,"fail":[]}""", State = JobState.Pending, CreatedAt = DateTime.UtcNow });
+            await db.SaveChangesAsync(ct);
+        }
+        await using var queue = new JobQueue(c.Store, [new CountingHandler()], new ProgressHub(), signals: new StartupSignals())
+            { ResumeSettle = TimeSpan.Zero, ResumeFallback = TimeSpan.FromMilliseconds(50), ResumeAiWait = TimeSpan.FromMilliseconds(50) };
+
+        await queue.StartAsync(ct);
+
+        Assert.Equal(JobState.Completed, (await queue.WaitAsync(1, ct)).State);
     }
 
     [Fact]

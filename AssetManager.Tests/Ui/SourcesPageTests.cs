@@ -23,7 +23,7 @@ public class SourcesPageTests : BunitContext
         var search = new AssetSearchService(c.Store);
         Services.AddMudServices();
         Services.AddSingleton(c.Store);
-        Services.AddSingleton<ICatalogStatsService>(new CatalogStatsService(c.Store, search));
+        Services.AddSingleton<ICatalogStatsService>(new CatalogStatsService(c.Store, search) { ComputeOnThreadPool = false });
         Services.AddSingleton(new SourceService(c.Store));
         Services.AddSingleton(new MetadataEditService(c.Store));
         Services.AddSingleton(new SourceTagService(c.Store));

@@ -1,11 +1,10 @@
-# Runs the tests on every push and pull request to master (spec "Automated build and tests").
+# Runs the tests on every pull request to master, not on pushes to it (spec "Automated build and tests").
 # A version tag (v1.2.3) also builds the portable Windows package and publishes it as a GitHub Release
 # (specs "Portable Windows package", "Versioned releases").
 name: Build
 
 on:
   push:
-    branches: [master]
     tags: ['v*.*.*']
   pull_request:
     branches: [master]
@@ -94,16 +93,10 @@ jobs:
           -p:Portable=true
           -o publish/AssetManager
 
+      # Spec "Compact package layout": one exe plus a few files and the llama/ffmpeg/licenses folders.
       - name: Check package contents
         shell: pwsh
-        run: |
-          $root = 'publish/AssetManager'
-          $required = 'AssetManager.exe', 'portable', 'LICENSE.txt', 'llama/LICENSE.txt', 'llama/vulkan/llama-server.exe', 'llama/cpu/llama-server.exe',
-                      'ffmpeg/ffmpeg.exe', 'ffmpeg/ffprobe.exe', 'ffmpeg/FFMPEG.LICENSE.txt'
-          $missing = $required | Where-Object { -not (Test-Path (Join-Path $root $_)) }
-          if ($missing) { throw "Missing from the package: $($missing -join ', ')" }
-          $models = Get-ChildItem $root -Recurse -Filter *.gguf
-          if ($models) { throw "The package must not contain models: $($models.Name -join ', ')" }
+        run: ./tools/check-package.ps1 publish/AssetManager
 
       # The version comes from the git tag through MinVer; a shallow or tagless checkout would build 0.0.0-alpha.0.
       - name: Check version
