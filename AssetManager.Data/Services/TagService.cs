@@ -49,6 +49,11 @@ public sealed partial class TagService(CatalogStore catalog)
             await db.Database.ExecuteSqlRawAsync(
                 "INSERT OR IGNORE INTO AssetTags (AssetId, TagId, Origin) SELECT value, {0}, {1} FROM json_each({2})",
                 [tag.Id, origin.ToString(), idsJson], ct);
+        // The user adding a tag again ends a per-asset opt-out of that source tag.
+        if (origin == TagOrigin.User)
+            foreach (var tag in tagRows)
+                await db.Database.ExecuteSqlRawAsync("DELETE FROM AssetTagOptOuts WHERE TagId = {0} AND AssetId IN (SELECT value FROM json_each({1}))",
+                    [tag.Id, idsJson], ct);
         await SearchIndexer.RefreshAsync(db, assetIds, ct);
         await EmbeddingStaleness.MarkAsync(db, assetIds, ct);
         catalog.NotifyContentChanged();
@@ -59,6 +64,16 @@ public sealed partial class TagService(CatalogStore catalog)
         if (assetIds.Count == 0) return;
         var names = NormalizeAll(tags);
         await using var db = catalog.CreateDbContext();
+        // Removing a tag that is a source tag of the asset's source opts this asset out of it, so it is not re-added later
+        // (spec "Per-asset opt-out of a source tag").
+        var tagIds = await db.Tags.Where(t => names.Contains(t.Name)).Select(t => t.Id).ToListAsync(ct);
+        var idsJson = JsonSerializer.Serialize(assetIds);
+        foreach (var tagId in tagIds)
+            await db.Database.ExecuteSqlRawAsync("""
+                INSERT OR IGNORE INTO AssetTagOptOuts (AssetId, TagId)
+                SELECT a.Id, st.TagId FROM Assets a JOIN SourceTags st ON st.SourceId = a.SourceId AND st.TagId = {0}
+                WHERE a.Id IN (SELECT value FROM json_each({1}))
+                """, [tagId, idsJson], ct);
         await db.AssetTags.Where(t => assetIds.Contains(t.AssetId) && names.Contains(t.Tag.Name)).ExecuteDeleteAsync(ct);
         await SearchIndexer.RefreshAsync(db, assetIds, ct);
         await EmbeddingStaleness.MarkAsync(db, assetIds, ct);
@@ -70,6 +85,12 @@ public sealed partial class TagService(CatalogStore catalog)
     public static async Task ReplaceOriginTagsAsync(CatalogDbContext db, Asset asset, IEnumerable<string> tags, TagOrigin origin, CancellationToken ct = default)
     {
         var wanted = await GetOrCreateAsync(db, tags, ct);
+        if (asset.Id != 0)
+        {
+            // Tags the user took off this asset stay off (per-asset opt-out of a source tag).
+            var optedOut = await db.AssetTagOptOuts.Where(o => o.AssetId == asset.Id).Select(o => o.TagId).ToListAsync(ct);
+            wanted.RemoveAll(w => w.Id != 0 && optedOut.Contains(w.Id));
+        }
         asset.Tags.RemoveAll(t => t.Origin == origin && !wanted.Any(w => ReferenceEquals(w, t.Tag) || (w.Id != 0 && w.Id == t.TagId)));
         foreach (var w in wanted)
             if (!asset.Tags.Any(t => ReferenceEquals(t.Tag, w) || (w.Id != 0 && t.TagId == w.Id)))

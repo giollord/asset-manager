@@ -45,7 +45,32 @@ public sealed record SearchQuery
 
     public bool TexturesMissing { get; init; }
 
+    /// <summary>Models with a texture the AI matched (design D20), for reviewing the matches.</summary>
+    public bool TexturesMatchedByAi { get; init; }
+
+    /// <summary>Models with texture suggestions to review (design D20).</summary>
+    public bool TextureSuggestions { get; init; }
+
     public AiStatus? AiStatus { get; init; }
+
+    public bool FavoritesOnly { get; init; }
+
+    /// <summary>Minimum star rating (1-5); 0 = no rating filter.</summary>
+    public int MinRating { get; init; }
+
+    public bool HasNotes { get; init; }
+
+    /// <summary>Assets with this license audit problem on their effective license (spec "License audit").</summary>
+    public LicenseProblem? LicenseProblem { get; init; }
+
+    /// <summary>Sprite sheets whose grid the detector was not sure about (review list).</summary>
+    public bool GridUncertain { get; init; }
+
+    /// <summary>
+    /// "Search by image": rank by similarity to a query image held in the in-memory image query cache (never in the
+    /// catalog). An id that is no longer cached means "query image expired".
+    /// </summary>
+    public string? ImageQueryId { get; init; }
 
     /// <summary>Rank by meaning (embeddings) instead of words; the other filters still apply.</summary>
     public bool Semantic { get; init; }

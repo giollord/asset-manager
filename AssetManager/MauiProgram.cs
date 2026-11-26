@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Maui.LifecycleEvents;
 using AssetManager.Core.Settings;
 using AssetManager.Shared;
 using Serilog;
@@ -20,7 +21,10 @@ public static class MauiProgram
             .ConfigureFonts(fonts =>
             {
                 fonts.AddFont("OpenSans-Regular.ttf", "OpenSansRegular");
-            });
+            })
+            .ConfigureLifecycleEvents(events => events.AddWindows(windows =>
+                windows.OnWindowCreated(window =>
+                    IPlatformApplication.Current!.Services.GetRequiredService<Services.WindowsWindowChrome>().Attach(window))));
 
         // Rolling log file under %LOCALAPPDATA%\AssetManager\logs (also read by tools when debugging).
         var logger = new LoggerConfiguration()
@@ -41,6 +45,10 @@ public static class MauiProgram
         builder.Services.AddSingleton<AssetManager.Core.Platform.IFolderPicker, Services.WindowsFolderPicker>();
         builder.Services.AddSingleton<AssetManager.Core.Platform.IShellService, Services.WindowsShellService>();
         builder.Services.AddSingleton<AssetManager.Core.Platform.IClipboardFileService, Services.WindowsClipboardFileService>();
+        builder.Services.AddSingleton<Services.WindowsDragOutService>();
+        builder.Services.AddSingleton<AssetManager.Core.Platform.IDragOutService>(sp => sp.GetRequiredService<Services.WindowsDragOutService>());
+        builder.Services.AddSingleton<Services.WindowsWindowChrome>();
+        builder.Services.AddSingleton<AssetManager.Core.Platform.IWindowChrome>(sp => sp.GetRequiredService<Services.WindowsWindowChrome>());
         builder.Services.AddAssetManager();
         builder.Services.AddMauiBlazorWebView();
 

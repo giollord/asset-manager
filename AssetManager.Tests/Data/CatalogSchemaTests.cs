@@ -17,7 +17,8 @@ public class CatalogSchemaTests
         await using var c = await TestCatalog.CreateAsync();
         var tables = await TablesAsync(c);
         foreach (var t in new[] { "Volumes", "Sources", "Assets", "AssetFiles", "Tags", "AssetTags", "Collections", "Previews",
-                     "StoredFiles", "StoredFileChunks", "Embeddings", "Jobs", "JobItemErrors", "ImportSessions", "StagedSkips", "Settings" })
+                     "StoredFiles", "StoredFileChunks", "Embeddings", "Jobs", "JobItemErrors", "ImportSessions", "StagedSkips", "Settings",
+                     "SourceTags", "AssetTagOptOuts" })
             Assert.Contains(t, tables);
 
         await using var db = c.Db();

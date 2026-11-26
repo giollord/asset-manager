@@ -137,8 +137,8 @@ public class ItemPassTests
         Assert.Equal("#D21E23", Assert.Single(edited.Colors).Hex);
 
         var palette = new Asset { Type = AssetType.Image, Colors = [new ColorInfo("#000000", "black", 1)] };
-        ItemPass.Apply(new ItemOutcome(palette, new ItemResult { Description = "x", Type = AssetType.SpriteSheet, Colors = ["red"] }, AiInputMode.Visual));
-        Assert.Equal(AssetType.SpriteSheet, palette.Type);
+        ItemPass.Apply(new ItemOutcome(palette, new ItemResult { Description = "x", Type = AssetType.Texture, Colors = ["red"] }, AiInputMode.Visual));
+        Assert.Equal(AssetType.Texture, palette.Type); // within the image family; sprite sheet is left to detection (SpriteSheetHintTests)
         Assert.Equal("black", Assert.Single(palette.Colors).Name); // measured palette wins over named colors
 
         Assert.False(ItemPass.CanRefine(AssetType.Model3D, AssetType.Image));
@@ -151,6 +151,34 @@ public class ItemPassTests
         var failed = new Asset();
         ItemPass.MarkFailed([failed], "Invalid AI output");
         Assert.Equal((AiStatus.Failed, "Invalid AI output"), (failed.AiStatus, failed.AiError));
+    }
+
+    [Fact]
+    public void Ai_pixel_art_answer_does_not_override_the_measurement()
+    {
+        // The AI says pixel art, the measurement says no: the asset is not marked.
+        var smooth = new Asset { Name = "splash", Type = AssetType.Image, Image = new ImageMetadata { Width = 2048, Height = 2048, IsPixelArt = false, PixelScale = 1 } };
+        var outcome = new ItemOutcome(smooth, new ItemResult
+        {
+            Index = 1, Description = "A painted splash screen.", Type = AssetType.Image, Tags = ["Pixel Art", "castle"], Style = ["pixel art", "fantasy"], PixelArt = true,
+        }, AiInputMode.Visual);
+        ItemPass.Apply(outcome);
+        Assert.False(smooth.Image!.IsPixelArt);
+        Assert.Equal(["fantasy"], smooth.Style);
+        Assert.Equal(["castle"], outcome.Tags);
+
+        // The measurement says yes, the AI disagrees: the measured positive stands.
+        var sprite = new Asset { Name = "hero", Type = AssetType.SpriteSheet, Image = new ImageMetadata { Width = 256, Height = 64, IsPixelArt = true, PixelScale = 4 } };
+        var positive = new ItemOutcome(sprite, new ItemResult { Index = 1, Description = "A hero.", Type = AssetType.SpriteSheet, Tags = ["hero"], Style = ["cartoon"], PixelArt = false },
+            AiInputMode.Visual);
+        ItemPass.Apply(positive);
+        Assert.Equal(["pixel art", "cartoon"], sprite.Style);
+        Assert.Equal(["pixel art", "hero"], positive.Tags);
+
+        // Models have no measurement: the AI's style stays.
+        var model = new Asset { Name = "voxel", Type = AssetType.Model3D };
+        ItemPass.Apply(new ItemOutcome(model, new ItemResult { Index = 1, Description = "A voxel tree.", Type = AssetType.Model3D, Style = ["pixel art"] }, AiInputMode.Visual));
+        Assert.Equal(["pixel art"], model.Style);
     }
 
     /// <summary>Manual check: non-English names yield English output; audio goes in directly when supported.</summary>

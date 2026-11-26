@@ -11,18 +11,62 @@
 *@
 <MudDialog>
     <DialogContent>
-        @if (_conflicts is null)
+        @if (_review is { } review)
+        {
+            <MudStack Spacing="2" Style="min-width: 520px; max-width: 720px" id="extract-review">
+                @{ var deps = review.Entries.Where(e => e.Dependency).ToList(); }
+                @if (deps.Count > 0)
+                {
+                    <MudText Typo="Typo.body2">The export also writes @deps.Count referenced file@(deps.Count == 1 ? "" : "s"):</MudText>
+                    <div style="max-height: 200px; overflow-y: auto">
+                        @foreach (var d in deps)
+                        {
+                            <div class="extract-dependency" style="display: flex; gap: 8px; align-items: center">
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">dependency</MudChip>
+                                <MudText Typo="Typo.body2" Style="word-break: break-all">@d.RelativeTarget</MudText>
+                            </div>
+                        }
+                    </div>
+                }
+                @foreach (var note in review.Notes)
+                {
+                    <MudAlert Severity="Severity.Warning" Dense="true" Class="extract-note">@note</MudAlert>
+                }
+                @if (review.GuidConflicts.Count > 0)
+                {
+                    <MudAlert Severity="Severity.Warning" Dense="true" id="extract-guid-conflicts">
+                        @review.GuidConflicts.Count file@(review.GuidConflicts.Count == 1 ? " has a GUID" : "s have GUIDs") the project already uses.
+                        Skip them, or continue and Unity will give one side a new GUID (references to it may break).
+                    </MudAlert>
+                    <div style="max-height: 160px; overflow-y: auto">
+                        @foreach (var c in review.GuidConflicts)
+                        {
+                            <MudText Typo="Typo.body2" Class="guid-conflict" Style="word-break: break-all">@c.RelativeTarget (already in @ProjectPath(c.ExistingMeta))</MudText>
+                        }
+                    </div>
+                }
+            </MudStack>
+        }
+        else if (_conflicts is null)
         {
             <MudStack Spacing="2" Style="min-width: 480px">
                 <MudText Typo="Typo.body2">Extract @Count(AssetIds.Count) with their companion files.</MudText>
                 <MudStack Row="true" AlignItems="AlignItems.End" Spacing="2">
-                    <MudTextField @bind-Value="_folder" Label="Target folder" Margin="Margin.Dense" Style="flex: 1" Class="extract-folder" Immediate="true" />
+                    <MudTextField T="string" Value="_folder" ValueChanged="FolderChanged" Label="Target folder" Margin="Margin.Dense" Style="flex: 1" Class="extract-folder" Immediate="true" />
                     <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.FolderOpen" OnClick="PickAsync" Class="extract-pick">Browse</MudButton>
                 </MudStack>
                 <MudRadioGroup T="bool" @bind-Value="_preserve">
                     <MudRadio T="bool" Value="true" Class="extract-preserve">Keep the original folder structure (e.g. Assets/...)</MudRadio>
                     <MudRadio T="bool" Value="false" Class="extract-flat">Write all files into the folder (flat)</MudRadio>
                 </MudRadioGroup>
+                <MudCheckBox T="bool" @bind-Value="_unity" Dense="true" Class="extract-unity"
+                             Label="Unity project export: write each file's original .meta (keeps GUIDs and import settings)" />
+                <MudCheckBox T="bool" @bind-Value="_includeReferences" Dense="true" Class="extract-references" Disabled="!_unity"
+                             Label="Include referenced files (materials, textures, meshes a prefab or material uses)" />
+                @if (_unityRoot is not null)
+                {
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary extract-unity-detected">The target folder is inside the Unity project @_unityRoot.</MudText>
+                }
             </MudStack>
         }
         else
@@ -38,7 +82,19 @@
     </DialogContent>
     <DialogActions>
         <MudButton OnClick="() => Dialog.Cancel()">Cancel</MudButton>
-        @if (_conflicts is null)
+        @if (_review is { } r)
+        {
+            @if (r.GuidConflicts.Count > 0)
+            {
+                <MudButton Variant="Variant.Outlined" OnClick="() => Reviewed(skipGuids: true)" Class="guid-skip">Skip conflicting</MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Warning" OnClick="() => Reviewed(skipGuids: false)" Class="guid-continue">Continue</MudButton>
+            }
+            else
+            {
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="() => Reviewed(skipGuids: false)" Class="review-ok">Continue</MudButton>
+            }
+        }
+        else if (_conflicts is null)
         {
             <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="string.IsNullOrWhiteSpace(_folder) || _planning" OnClick="PlanAsync" Class="extract-ok">Extract</MudButton>
         }
@@ -58,6 +114,12 @@
 
     private string? _folder;
     private bool _preserve = true;
+    private bool _unity;
+    private bool _includeReferences;
+    private string? _unityRoot;
+    private ExportPlan? _review;
+    private ExportPlan? _plan;
+    private string[] _skipGuids = [];
     private bool _planning;
     private IReadOnlyList<string>? _conflicts;
     private int _index;
@@ -69,7 +131,16 @@
     private async Task PickAsync()
     {
         var picked = await Ui.RunAsync(() => Folders.PickFolderAsync());
-        if (picked is not null) _folder = picked;
+        if (picked is not null) FolderChanged(picked);
+    }
+
+    /// <summary>A target inside a Unity project turns Unity project export on (the user can still turn it off).</summary>
+    private void FolderChanged(string? folder)
+    {
+        _folder = folder;
+        var root = UnityProject.FindRoot(folder?.Trim());
+        if (root != _unityRoot) _unity = root is not null;
+        _unityRoot = root;
     }
 
     private async Task PlanAsync()
@@ -84,16 +155,38 @@
                 return;
             }
             _folder = folder;
-            var plan = await Ui.RunAsync(() => Exporter.PlanAsync(AssetIds, folder, _preserve));
+            var options = new ExportOptions(folder, _preserve, UnityMeta: _unity, IncludeReferences: _unity && _includeReferences);
+            var plan = await Ui.RunAsync(() => Exporter.PlanAsync(AssetIds, options));
             if (plan is null) return;
-            if (plan.Conflicts.Count == 0) Finish(ConflictChoice.Rename);
-            else _conflicts = plan.Conflicts;
+            _plan = plan;
+            // Dependencies, notes and GUID conflicts are shown first; nothing is written before the user's choice.
+            if (plan.Entries.Any(e => e.Dependency) || plan.Notes.Count > 0 || plan.GuidConflicts.Count > 0) _review = plan;
+            else Conflicts(plan);
         }
         finally
         {
             _planning = false;
         }
     }
+
+    private void Reviewed(bool skipGuids)
+    {
+        _skipGuids = skipGuids ? _review!.GuidConflicts.Select(c => c.Guid).Distinct().ToArray() : [];
+        _review = null;
+        Conflicts(_plan!);
+    }
+
+    /// <summary>Name conflicts of the files that will be written (GUID-skipped ones are not asked about).</summary>
+    private void Conflicts(ExportPlan plan)
+    {
+        var skipped = plan.GuidConflicts.Where(c => _skipGuids.Contains(c.Guid)).Select(c => c.RelativeTarget).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var conflicts = plan.Conflicts.Where(c => !skipped.Contains(c)).ToList();
+        if (conflicts.Count == 0) Finish(ConflictChoice.Rename);
+        else _conflicts = conflicts;
+    }
+
+    private string ProjectPath(string meta) =>
+        _unityRoot is null ? meta[..^5] : Path.GetRelativePath(_unityRoot, meta[..^5]);
 
     private void Decide(ConflictChoice choice)
     {
@@ -108,5 +201,6 @@
 
     /// <summary>Closes with the payload; <paramref name="rest"/> covers the conflicts not decided one by one.</summary>
     private void Finish(ConflictChoice rest) =>
-        Dialog.Close(DialogResult.Ok(new ExtractPayload([.. AssetIds], _folder!, _preserve, rest, new Dictionary<string, ConflictChoice>(_choices))));
+        Dialog.Close(DialogResult.Ok(new ExtractPayload([.. AssetIds], _folder!, _preserve, rest, new Dictionary<string, ConflictChoice>(_choices), _unity,
+            _unity && _includeReferences, _skipGuids)));
 }

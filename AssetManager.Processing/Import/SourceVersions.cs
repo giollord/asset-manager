@@ -76,6 +76,26 @@ public sealed class SourceVersions(CatalogStore catalog, ILogger<SourceVersions>
         return proposals;
     }
 
+    /// <summary>
+    /// The committed source that a not-yet-imported folder with these files most likely is a new version of (library
+    /// scan, design D11): the same relative-path overlap the import's proposal uses.
+    /// </summary>
+    public async Task<(long Id, double Score)?> MatchListingAsync(IEnumerable<string> relativePaths, CancellationToken ct = default)
+    {
+        var keys = new Keys([], relativePaths.Select(PathKey).ToHashSet());
+        if (keys.Paths.Count == 0) return null;
+        await using var db = catalog.CreateDbContext();
+        (long Id, double Score)? best = null;
+        foreach (var candidate in await CandidatesAsync(db, keys, ct))
+        {
+            var other = (await KeysAsync(db, candidate, ct)).Paths;
+            var shared = keys.Paths.Count(other.Contains);
+            var score = (double)shared / (keys.Paths.Count + other.Count - shared);
+            if (score >= Threshold && (best is null || score > best.Value.Score)) best = (candidate, score);
+        }
+        return best;
+    }
+
     private static async Task<Keys> KeysAsync(CatalogDbContext db, long sourceId, CancellationToken ct)
     {
         var files = await db.AssetFiles.IgnoreQueryFilters().Where(f => f.Role == FileRole.Primary && f.Asset.SourceId == sourceId)
@@ -160,6 +180,8 @@ public sealed class SourceVersions(CatalogStore catalog, ILogger<SourceVersions>
         await db.AllAssets.Where(a => a.SourceId == stagedSourceId).ExecuteDeleteAsync(ct);
         await db.AllSources.Where(s => s.ParentSourceId == stagedSourceId).ExecuteUpdateAsync(u => u.SetProperty(s => s.ParentSourceId, oldSourceId), ct);
         await db.StagedSkips.Where(s => s.SourceId == stagedSourceId).ExecuteUpdateAsync(u => u.SetProperty(s => s.SourceId, oldSourceId), ct);
+        // Source tags the AI gave the staged version (consensus) move to the replaced source.
+        await db.Database.ExecuteSqlRawAsync("UPDATE OR IGNORE SourceTags SET SourceId = {0} WHERE SourceId = {1}", [oldSourceId, stagedSourceId], ct);
 
         var staged = await db.AllSources.FirstAsync(s => s.Id == stagedSourceId, ct);
         var old = await db.AllSources.FirstAsync(s => s.Id == oldSourceId, ct);
@@ -194,6 +216,8 @@ public sealed class SourceVersions(CatalogStore catalog, ILogger<SourceVersions>
         if (!edited.HasFlag(EditedFields.Name)) o.Name = s.Name;
         if (!edited.HasFlag(EditedFields.Type)) o.Type = s.Type;
         (o.Image, o.Audio, o.Model, o.Font, o.Video, o.Document) = (s.Image, s.Audio, s.Model, s.Font, s.Video, s.Document);
+        if (!edited.HasFlag(EditedFields.Grid)) (o.SpriteSheet, o.GridUncertain) = (s.SpriteSheet, s.GridUncertain);
+        // Favourite, rating and notes belong to the user and stay on the old asset (design D10).
         (o.ScaleAnomaly, o.TexturesMissing, o.PreviewError, o.PreviewOptionsVersion) = (s.ScaleAnomaly, s.TexturesMissing, s.PreviewError, s.PreviewOptionsVersion);
         if (!edited.HasFlag(EditedFields.Orientation)) (o.OrientationUncertain, o.OrientationVerified) = (s.OrientationUncertain, s.OrientationVerified);
         if (s.AiStatus == AiStatus.Pending)

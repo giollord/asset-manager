@@ -28,12 +28,15 @@ public static class AiServiceCollectionExtensions
                 () => runtime.Embeddings is { } g ? new Enrichment.EmbeddingModel(g, Path.GetFileName(settings.Current.EmbeddingModelPath ?? "embedding")) : null,
                 sp.GetService<Microsoft.Extensions.Logging.ILogger<Enrichment.EmbeddingService>>());
         });
+        services.TryAddSingleton<Enrichment.ImageQueryCache>();
+        services.TryAddSingleton<Enrichment.ImageQueryService>();
         services.TryAddSingleton<Enrichment.CatalogSearch>();
         services.TryAddSingleton<Import.ImportEnricher>();
         services.TryAddSingleton<Import.ImportService>();
         services.AddSingleton<Core.Jobs.IJobHandler, Import.ImportJob>();
         services.AddSingleton<Core.Jobs.IJobHandler, Import.ImportCommitJob>();
         services.AddSingleton<Core.Jobs.IJobHandler, Import.EnrichAssetsJob>();
+        services.AddSingleton<Core.Jobs.IJobHandler, Import.ConsensusJob>();
         services.AddSingleton<Core.Jobs.IJobHandler, Enrichment.DescribeCollectionJob>();
         services.AddSingleton<Import.ImportReviewService>();
         services.TryAddSingleton<Enrichment.ReenrichService>();

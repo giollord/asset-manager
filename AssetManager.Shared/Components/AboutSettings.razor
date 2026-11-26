@@ -1,26 +1,54 @@
 @using AssetManager.Core.Platform
+@using AssetManager.Core.Updates
+@implements IDisposable
 @inject AppDataLocation Location
+@inject IAppSettingsStore Settings
+@inject UpdateChecker Updates
 @inject IShellService Shell
 @inject Services.UiActions Ui
 
 @* Version, portable or not, and where the app keeps its data (spec "Data folder shown in Settings"). *@
 <MudPaper Class="pa-4" Outlined="true" id="about-settings">
-    <MudText Typo="Typo.h6" Class="mb-2">About</MudText>
+    <MudText Typo="Typo.h6" Class="mb-2">@Title</MudText>
     <MudSimpleTable Dense="true" Elevation="0" Style="max-width: 900px">
         <tbody>
-            <tr><td style="width: 160px">Version</td><td id="about-version">@AppVersion.Current</td></tr>
-            <tr><td>Mode</td><td id="about-mode">@ModeText</td></tr>
+            <tr>
+                <td style="width: 160px">Version</td>
+                <td>
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                        <MudText Typo="Typo.body2" Class="selectable" id="about-version">@AppVersion.Current</MudText>
+                        @if (Updates.Available is { } update)
+                        {
+                            <MudLink Typo="Typo.body2" OnClick="() => OpenReleaseAsync(update)" id="about-update" title="@update.Url">@update.Version available</MudLink>
+                        }
+                    </MudStack>
+                </td>
+            </tr>
+            <tr><td>Mode</td><td class="selectable" id="about-mode">@ModeText</td></tr>
             <tr>
                 <td>Data folder</td>
                 <td>
                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-                        <MudText Typo="Typo.body2" Style="word-break: break-all" id="about-data-folder">@Location.Root</MudText>
+                        <MudText Typo="Typo.body2" Class="selectable" Style="word-break: break-all" id="about-data-folder">@Location.Root</MudText>
                         <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.FolderOpen" OnClick="OpenAsync" id="about-open-folder">Open folder</MudButton>
                     </MudStack>
                 </td>
             </tr>
         </tbody>
     </MudSimpleTable>
+
+    <MudText Typo="Typo.subtitle2" Class="mt-4">Updates</MudText>
+    <MudSwitch T="bool" Value="Settings.Current.UpdateCheckEnabled" ValueChanged="v => Settings.Update(s => s.UpdateCheckEnabled = v)" Color="Color.Primary"
+               Label="Check for updates" id="about-update-check" />
+    <MudText Typo="Typo.caption" Class="mud-text-secondary" HtmlTag="div">
+        Once a day at startup, asks GitHub whether a newer release exists. Nothing is downloaded or installed, and no data is sent besides the request itself.
+        Apart from AI model downloads, this is the only time the app goes online. Off by default.
+    </MudText>
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-1">
+        <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.Update" OnClick="CheckNowAsync"
+                   Disabled="!Settings.Current.UpdateCheckEnabled || _checking" id="about-check-now">Check now</MudButton>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary" id="about-update-status">@UpdateStatus</MudText>
+    </MudStack>
     @if (Location.Mode == DataMode.Fallback)
     {
         <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2" id="about-fallback">
@@ -30,6 +58,46 @@
 </MudPaper>
 
 @code {
+    public const string Title = "About";
+
+    /// <summary>The section's title and setting names, for the Settings search (design D8).</summary>
+    public static readonly string[] SearchTerms = [Title, "Version", "Mode", "Data folder", "Open folder", "Updates", "Check for updates", "Check now"];
+
+    private bool _checking;
+
+    protected override void OnInitialized()
+    {
+        Settings.Changed += OnSettings;
+        Updates.NewVersionFound += OnFound;
+    }
+
+    private void OnSettings(AppSettings _) => InvokeAsync(StateHasChanged);
+
+    private void OnFound() => InvokeAsync(StateHasChanged);
+
+    private string? UpdateStatus => Settings.Current switch
+    {
+        { LastUpdateCheck: null } => null,
+        { LastCheckFailed: true, LastUpdateCheck: { } at } => $"The last check failed ({at.ToLocalTime():g}).",
+        { LastUpdateCheck: { } at } when Updates.Available is null => $"Up to date (checked {at.ToLocalTime():g}).",
+        { LastUpdateCheck: { } at } => $"Checked {at.ToLocalTime():g}.",
+    };
+
+    private async Task CheckNowAsync()
+    {
+        _checking = true;
+        try { await Updates.CheckAsync(); }
+        finally { _checking = false; }
+    }
+
+    private Task OpenReleaseAsync(UpdateInfo update) => Ui.RunAsync(() => Shell.OpenAsync(update.Url));
+
+    public void Dispose()
+    {
+        Settings.Changed -= OnSettings;
+        Updates.NewVersionFound -= OnFound;
+    }
+
     private string ModeText => Location.Mode switch
     {
         DataMode.Portable => "Portable: everything is kept in the data folder next to the app",

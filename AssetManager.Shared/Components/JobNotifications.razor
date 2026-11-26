@@ -1,5 +1,6 @@
 @using AssetManager.Core.Domain
 @using AssetManager.Core.Jobs
+@using AssetManager.Processing.Sync
 @implements IDisposable
 @inject IProgressHub Hub
 @inject ISnackbar Snackbar
@@ -12,7 +13,7 @@
 
     private void OnFinished(JobSnapshot job) => InvokeAsync(() => Notify(job));
 
-    public static (string Message, Severity Severity) Describe(JobSnapshot job) => job.State switch
+    public static (string Message, Severity Severity) Describe(JobSnapshot job) => SyncFindings(job) is { } findings ? (findings, Severity.Info) : job.State switch
     {
         JobState.Completed when job.Errors > 0 => ($"{job.Title} finished with {job.Errors} error{(job.Errors == 1 ? "" : "s")}.", Severity.Warning),
         JobState.Completed => ($"{job.Title} finished.", Severity.Success),
@@ -20,18 +21,40 @@
         _ => ($"{job.Title} was cancelled.", Severity.Info),
     };
 
+    /// <summary>
+    /// What a finished rescan or library scan found (spec "When scans run"), or null for other jobs and for scans that
+    /// found nothing. Its notification opens the results instead of the job.
+    /// </summary>
+    public static string? SyncFindings(JobSnapshot job)
+    {
+        if (job.State != JobState.Completed || job.SummaryJson is not { } json) return null;
+        var prefix = job.Title.StartsWith(SyncStartupTask.TitlePrefix, StringComparison.Ordinal) ? "Startup check: " : "";
+        if (job.Type == LibraryScanJob.JobType)
+        {
+            var packs = System.Text.Json.JsonSerializer.Deserialize<LibraryScanSummary>(json, JobJson.Options)?.NewPacks ?? 0;
+            return packs == 0 ? null : $"{prefix}{(packs == 1 ? "1 new pack" : $"{packs} new packs")} found in the library folders.";
+        }
+        if (job.Type == RescanJob.JobType)
+        {
+            var changed = System.Text.Json.JsonSerializer.Deserialize<RescanSummary>(json, JobJson.Options)?.Changed ?? 0;
+            return changed == 0 ? null : $"{prefix}{(changed == 1 ? "1 source has" : $"{changed} sources have")} changed files.";
+        }
+        return null;
+    }
+
     private void Notify(JobSnapshot job)
     {
         var (message, severity) = Describe(job);
+        var findings = SyncFindings(job) is not null;
         Snackbar.Add(message, severity, options =>
         {
-            options.Action = "Details";
+            options.Action = findings ? "Show" : "Details";
             options.ActionColor = Color.Inherit;
             options.RequireInteraction = false; // with an action MudBlazor would otherwise keep it until clicked
             options.VisibleStateDuration = AssetManagerServiceCollectionExtensions.ToastDuration;
             options.OnClick = _ =>
             {
-                Nav.NavigateTo($"jobs?job={job.Id}");
+                Nav.NavigateTo(findings ? AssetManager.Shared.Pages.Sources.ChangesHref : $"jobs?job={job.Id}");
                 return Task.CompletedTask;
             };
         }, key: $"job-{job.Id}");

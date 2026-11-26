@@ -88,8 +88,9 @@ public sealed class StructuredChat(IChatClient client, ILogger? logger = null)
         }
         if (result is null) return ["the answer was null"];
         var problems = new List<string>();
-        if (result is IAiResult self) problems.AddRange(self.Validate());
+        // The caller's check first: it may hand the result what the request contained (e.g. the expected item labels).
         if (validate is not null) problems.AddRange(validate(result));
+        if (result is IAiResult self) problems.AddRange(self.Validate());
         return problems;
     }
 

@@ -17,7 +17,8 @@ public sealed record PackInput(
     IReadOnlyList<SourceDocument> Documents,
     IReadOnlyList<AiImage> Samples,
     StoreInfo? Store = null,
-    string? Instruction = null);
+    string? Instruction = null,
+    IReadOnlyList<string>? SuggestedTags = null);
 
 /// <summary>Defaults the items of a pack inherit (tags with origin AI, style when the item has none).</summary>
 public sealed record PackDefaults(IReadOnlyList<string> Tags, IReadOnlyList<string> Style);
@@ -69,6 +70,7 @@ public static class PackPass
         var samples = vision ? input.Samples.Take(MaxSamples).ToList() : [];
         if (samples.Count > 0) sb.AppendLine($"\n{samples.Count} sample previews follow, each preceded by its file name.");
         sb.AppendLine("\nTags must apply to every item in the pack (theme, setting, genre, purpose), 3-8 tags, not to single items and not file formats or the pack name.");
+        if (input.SuggestedTags is { Count: > 0 } suggested) sb.AppendLine(SuggestedTags.PromptLine(suggested));
         sb.AppendLine("Style is the visual or audio style only (e.g. \"low poly\", \"pixel art\", \"stylized\", \"realistic\", \"hand-painted\", \"orchestral\"); leave it empty when you cannot tell.");
 
         var contents = new List<AIContent> { new TextContent(sb.ToString()) };
@@ -89,7 +91,8 @@ public static class PackPass
         if (!source.UserEdited.HasFlag(EditedFields.Description)) source.Description = result.Description.Trim();
         SourceFacts.Apply(source, input.Documents, result);
         if (!source.UserEdited.HasFlag(EditedFields.Notes)) source.Notes = Notes(input.Files, result.ScriptNotes);
-        return new PackDefaults(AiText.NormalizeTags(result.Tags).Take(10).ToList(), AiText.NormalizeTags(result.Style));
+        return new PackDefaults(SuggestedTags.Fold(AiText.NormalizeTags(result.Tags), input.SuggestedTags).Take(10).ToList(),
+            SuggestedTags.Fold(AiText.NormalizeTags(result.Style), input.SuggestedTags));
     }
 
     /// <summary>

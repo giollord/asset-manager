@@ -1,0 +1,14 @@
+<Project>
+  <!--
+    Version from git tags (spec "Versioned releases", design D9): a build of the tagged commit v1.2.0 is 1.2.0, a later
+    commit builds as a pre-release of the next patch (1.2.1-alpha.0.<commits since the tag>). Needs the tags and full
+    history in the checkout (CI uses fetch-depth: 0).
+  -->
+  <PropertyGroup>
+    <MinVerTagPrefix>v</MinVerTagPrefix>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MinVer" Version="8.0.0" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

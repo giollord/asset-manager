@@ -95,4 +95,29 @@ public class CollectionsPageTests : BunitContext
         Assert.Equal(5, page.FindAll("#collection-members [data-id]").Count);
         Assert.DoesNotContain(page.FindAll("#collection-members [data-id]"), e => e.GetAttribute("data-id") == ids[0].ToString());
     }
+
+    [Fact]
+    public async Task Only_the_chosen_collection_is_selected()
+    {
+        await using var c = await TestCatalog.CreateAsync();
+        await TestData.SourceAsync(c, 1);
+        var collections = new CollectionService(c.Store);
+        var ids = new List<long>();
+        foreach (var name in new[] { "One", "Two", "Three" })
+            ids.Add((await collections.SaveAsync(new Collection { Name = name, IncludeTags = ["x"] }, Ct)).Id);
+        Use(c);
+
+        // Opened on a collection: only that one shows as selected.
+        var page = Render<Collections>(p => p.Add(x => x.Id, ids[0]));
+        page.WaitForAssertion(() => Assert.Equal(3, page.FindAll(".collection-row").Count));
+        Assert.Equal([ids[0].ToString()], Selected(page));
+
+        // Choosing the second one selects it alone (it used to select every item).
+        page.FindAll(".collection-row")[1].Click();
+        page.Render(p => p.Add(x => x.Id, ids[1]));
+        page.WaitForAssertion(() => Assert.Equal([ids[1].ToString()], Selected(page)));
+    }
+
+    private static string[] Selected(IRenderedComponent<Collections> page) =>
+        page.FindAll(".collection-row.mud-selected-item").Select(e => e.GetAttribute("data-id")!).ToArray();
 }

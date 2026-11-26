@@ -30,7 +30,7 @@
         <div class="pa-4" style="overflow-y: auto; height: 100%">
             <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
                 <MudIcon Icon="@AssetCard.TypeIcon(a.Type)" />
-                <MudText Typo="Typo.h6" Style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap" title="@a.Name" id="details-name">@a.Name</MudText>
+                <MudText Typo="Typo.h6" Class="selectable" Style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap" title="@a.Name" id="details-name">@a.Name</MudText>
                 <MudTooltip Text="@(a.IsStored ? "Stored in the catalog — remove the stored copy" : "Store the original in the catalog (works offline)")">
                     <MudIconButton Icon="@(a.IsStored ? Icons.Material.Filled.Inventory : Icons.Material.Outlined.Inventory2)" Size="Size.Small"
                                    Color="@(a.IsStored ? Color.Success : Color.Default)" OnClick="ToggleStoredAsync" id="details-store" />
@@ -43,12 +43,29 @@
             <MudText Typo="Typo.caption" HtmlTag="div" Class="mud-text-secondary">
                 @a.Type @Edited(EditedFields.Type) · imported @a.ImportedAt.ToLocalTime().ToString("g") · AI: @a.AiStatus
             </MudText>
+            @* ---- favourite and rating (user-owned, design D10) ---- *@
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mt-1" id="details-rating-row">
+                <MudTooltip Text="@(a.Favorite ? "Remove from favourites" : "Add to favourites")">
+                    <MudIconButton Icon="@(a.Favorite ? Icons.Material.Filled.Favorite : Icons.Material.Outlined.FavoriteBorder)" Size="Size.Small"
+                                   Color="@(a.Favorite ? Color.Secondary : Color.Default)" OnClick="ToggleFavoriteAsync" id="details-favorite" />
+                </MudTooltip>
+                <MudRating SelectedValue="a.Rating" SelectedValueChanged="SetRatingAsync" MaxValue="5" Size="Size.Small" id="details-rating" />
+                @if (a.Rating > 0)
+                {
+                    <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="() => SetRatingAsync(0)" id="details-rating-clear">Clear rating</MudButton>
+                }
+            </MudStack>
 
             @* ---- previews ---- *@
             <div class="mt-3">
                 @if (a.Type is AssetType.Model3D or AssetType.Animation && (_showViewer || _rotation != _savedRotation))
                 {
-                    <ModelViewer AssetId="a.Id" Rotation="_rotation" />
+                    @* An unsaved rotation is not in the stored renders, so only a saved one falls back to them (design D18). *@
+                    <ModelViewer AssetId="a.Id" Rotation="_rotation" FallbackToRenders="_rotation == _savedRotation" />
+                }
+                else if (a.Type == AssetType.Model3D && _d.Views.Count > 0)
+                {
+                    <ModelTurntable AssetId="a.Id" Version="RendersVersion" Id="details-turntable" />
                 }
                 else if (_d.Views.Count > 0)
                 {
@@ -88,6 +105,12 @@
                 }
             </div>
 
+            @* ---- sprite sheet (images) ---- *@
+            @if (a.Type is AssetType.Image or AssetType.Texture or AssetType.SpriteSheet && a.Image is not null)
+            {
+                <SpriteSheetPanel Asset="a" Image="_d.SheetImage" />
+            }
+
             @* ---- orientation (models) ---- *@
             @if (a.Model is { } model)
             {
@@ -120,6 +143,10 @@
                         </MudStack>
                     }
                 </MudPaper>
+                @if (a.Type == AssetType.Model3D)
+                {
+                    <ModelTextures AssetId="a.Id" OnChanged="LoadAsync" />
+                }
             }
 
             @* ---- manual edit ---- *@
@@ -156,14 +183,25 @@
             @* ---- description, tags, license, links ---- *@
             @if (!string.IsNullOrWhiteSpace(a.Description))
             {
-                <MudText Typo="Typo.body2" HtmlTag="div" Class="mt-3" id="details-description">@a.Description @Edited(EditedFields.Description)</MudText>
+                <MudText Typo="Typo.body2" HtmlTag="div" Class="mt-3 selectable" id="details-description">@a.Description @Edited(EditedFields.Description)</MudText>
             }
             <MudText Typo="Typo.subtitle2" Class="mt-3">Tags</MudText>
             <TagEditor Tags="_d.Tags" OnAdd="AddTagAsync" OnRemove="RemoveTagAsync" />
 
+            <MudText Typo="Typo.subtitle2" Class="mt-3">Notes</MudText>
+            <MudTextField T="string" @bind-Value="_notes" Placeholder="Your notes (searchable)" Lines="2" AutoGrow="true" MaxLines="8" Margin="Margin.Dense"
+                          Variant="Variant.Outlined" Immediate="true" id="details-notes" />
+            @if ((_notes ?? "").Trim() != (a.Notes ?? ""))
+            {
+                <MudStack Row="true" Justify="Justify.FlexEnd" Spacing="1" Class="mt-1">
+                    <MudButton Size="Size.Small" OnClick="() => _notes = a.Notes">Discard</MudButton>
+                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveNotesAsync" id="details-notes-save">Save notes</MudButton>
+                </MudStack>
+            }
+
             <MudText Typo="Typo.subtitle2" Class="mt-3">License</MudText>
             <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" id="details-license">
-                <LicenseBadge License="a.HasLicenseOverride ? a.LicenseOverride : a.Source.License" />
+                <span class="selectable"><LicenseBadge License="a.HasLicenseOverride ? a.LicenseOverride : a.Source.License" /></span>
                 @if (a.HasLicenseOverride)
                 {
                     <MudText Typo="Typo.caption" Class="mud-text-secondary">set for this asset</MudText>
@@ -176,7 +214,7 @@
                 <MudText Typo="Typo.subtitle2" Class="mt-3">Links</MudText>
                 @foreach (var link in links)
                 {
-                    <div><MudLink Typo="Typo.body2" OnClick="() => OpenLinkAsync(link.Url)" title="@link.Url">@(link.Label ?? link.Url)</MudLink></div>
+                    <div><MudLink Typo="Typo.body2" Class="selectable" OnClick="() => OpenLinkAsync(link.Url)" title="@link.Url">@(link.Label ?? link.Url)</MudLink></div>
                 }
             }
             @if (a.Source.Store.Url is { } storeUrl)
@@ -188,7 +226,7 @@
             <MudText Typo="Typo.subtitle2" Class="mt-3">Source</MudText>
             <MudBreadcrumbs Items="_chain" Class="pa-0" id="details-sources">
                 <ItemTemplate Context="item">
-                    <MudLink Typo="Typo.body2" OnClick="() => BrowseSource(long.Parse(item.Href!))">@item.Text</MudLink>
+                    <MudLink Typo="Typo.body2" Class="selectable" OnClick="() => BrowseSource(long.Parse(item.Href!))">@item.Text</MudLink>
                 </ItemTemplate>
             </MudBreadcrumbs>
             <MudSimpleTable Dense="true" Elevation="0" Class="mt-1" id="details-files">
@@ -196,7 +234,7 @@
                     @foreach (var f in a.Files.OrderBy(f => f.Role))
                     {
                         <tr>
-                            <td style="word-break: break-all"><MudText Typo="Typo.caption">@(f.RelativePath.Length > 0 ? f.RelativePath : f.FileName)</MudText></td>
+                            <td style="word-break: break-all"><MudText Typo="Typo.caption" Class="selectable">@(f.RelativePath.Length > 0 ? f.RelativePath : f.FileName)</MudText></td>
                             <td><MudText Typo="Typo.caption">@f.Role</MudText></td>
                             <td style="white-space: nowrap"><MudText Typo="Typo.caption">@Pages.Dashboard.Bytes(f.Size)</MudText></td>
                         </tr>
@@ -210,7 +248,7 @@
                 <tbody>
                     @foreach (var (label, value) in Facts(a))
                     {
-                        <tr><td><MudText Typo="Typo.caption" Class="mud-text-secondary">@label</MudText></td><td><MudText Typo="Typo.caption">@value</MudText></td></tr>
+                        <tr><td><MudText Typo="Typo.caption" Class="mud-text-secondary">@label</MudText></td><td><MudText Typo="Typo.caption" Class="selectable">@value</MudText></td></tr>
                     }
                 </tbody>
             </MudSimpleTable>
@@ -234,12 +272,17 @@
 
     private AssetDetails? _d;
     private long? _loaded;
+
+    /// <summary>Changes when the stored renders change (e.g. regenerated), so the turntable reloads only then.</summary>
+    private int RendersVersion => _d is null ? 0 : _d.Views.Aggregate(_d.Views.Count, (h, v) => HashCode.Combine(h, v.Bytes.Length));
     private int _view;
     private bool _showViewer;
     private string? _clip;
     private EditModel? _edit;
     private (int X, int Y, int Z) _rotation, _savedRotation;
     private List<BreadcrumbItem> _chain = [];
+    private string? _notes, _savedNotes;
+    private long? _loadedNotesFor;
 
     protected override void OnInitialized() => Catalog.ContentChanged += OnCatalogChanged;
 
@@ -264,6 +307,12 @@
             await CloseAsync();
             return;
         }
+        if (_loadedNotesFor != id || (_notes ?? "").Trim() == (_savedNotes ?? ""))
+        {
+            _notes = _savedNotes = _d.Asset.Notes;
+            _loadedNotesFor = id;
+        }
+        else _savedNotes = _d.Asset.Notes;
         var o = _d.Asset.Model?.Orientation;
         _savedRotation = _rotation = (o?.RotX ?? 0, o?.RotY ?? 0, o?.RotZ ?? 0);
         _chain = _d.SourceChain.Select(s => new BreadcrumbItem(s.DisplayName, s.Id.ToString())).ToList();
@@ -359,6 +408,12 @@
         copy.Attribution = attribution;
         return copy;
     }
+
+    private Task ToggleFavoriteAsync() => Ui.RunAsync(() => Edits.SetFavoriteAsync([_d!.Asset.Id], !_d.Asset.Favorite));
+
+    private Task SetRatingAsync(int rating) => Ui.RunAsync(() => Edits.SetRatingAsync([_d!.Asset.Id], rating));
+
+    private Task SaveNotesAsync() => Ui.RunAsync(() => Edits.SetNotesAsync(_d!.Asset.Id, _notes), "Notes saved.");
 
     private Task ResetLicenseAsync() => Ui.RunAsync(() => Edits.ResetLicenseToSourceAsync(_d!.Asset.Id));
 

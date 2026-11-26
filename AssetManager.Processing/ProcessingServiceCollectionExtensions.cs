@@ -45,6 +45,10 @@ public static class ProcessingServiceCollectionExtensions
         services.AddSingleton<IAssetTypeHandler, DocumentHandler>();
         services.TryAddSingleton<CompanionResolver>();
         services.TryAddSingleton<PreviewService>();
+        services.TryAddSingleton(sp => new TextureMatcher(sp.GetRequiredService<AssetManager.Data.CatalogStore>(), sp.GetRequiredService<ILocationResolver>(),
+            sp.GetRequiredService<PreviewSettings>(), sp.GetService<Models.IModelRenderer>()));
+        services.TryAddSingleton<ITextureMatcher>(sp => sp.GetRequiredService<TextureMatcher>());
+        services.TryAddSingleton<ModelTextureService>();
         services.AddSingleton<IAssetTypeHandler, FallbackHandler>();
         services.TryAddSingleton<HandlerRegistry>();
         services.TryAddSingleton<AssetProcessor>();
@@ -55,11 +59,22 @@ public static class ProcessingServiceCollectionExtensions
         services.TryAddSingleton<Import.StagedRegrouping>();
         services.TryAddSingleton<Import.ImportStager>();
         services.AddSingleton<Core.Jobs.IJobHandler, Jobs.RegeneratePreviewsJob>();
+        services.AddSingleton<Core.Jobs.IJobHandler, Jobs.ApplyTextureSuggestionsJob>();
+        services.AddSingleton<Core.Jobs.IJobHandler, Jobs.RedetectSpritesJob>();
+        services.TryAddSingleton<Sync.RescanService>();
+        services.AddSingleton<Core.Jobs.IJobHandler, Sync.RescanJob>();
+        services.TryAddSingleton<Sync.LibraryScanService>();
+        services.AddSingleton<Core.Jobs.IJobHandler, Sync.LibraryScanJob>();
+        services.TryAddSingleton<Sync.SyncStartupTask>();
+        services.AddSingleton<IStartupTask>(sp => sp.GetRequiredService<Sync.SyncStartupTask>());
         services.AddSingleton<Core.Jobs.IJobHandler, Jobs.StoreOriginalsJob>();
         services.AddSingleton<Core.Jobs.IJobHandler, Jobs.RemoveStoredOriginalsJob>();
         services.AddSingleton<Core.Jobs.IJobHandler, Jobs.CompactJob>();
         services.AddSingleton<Core.Jobs.IJobHandler, Import.ReimportJob>();
+        services.TryAddSingleton<Export.UnityReferences>();
         services.TryAddSingleton<Export.AssetExporter>();
+        services.TryAddSingleton<Export.SpriteFrameExporter>();
+        services.TryAddSingleton<Export.DragOutPlanner>();
         services.TryAddSingleton<Export.OriginalMedia>();
         services.AddSingleton<Core.Jobs.IJobHandler, Export.ExtractAssetsJob>();
         services.AddSingleton<Core.Jobs.IJobHandler, Export.CopyAssetsJob>();

@@ -18,7 +18,8 @@ namespace AssetManager.Processing.Import;
 /// <param name="IgnoredFolders">Folder ignore rules for this import only, added to the defaults.</param>
 /// <param name="UseDefaultIgnores">Apply the catalog's default ignored folders.</param>
 public sealed record ImportRequest(IReadOnlyList<string> Inputs, IReadOnlyList<string>? SharedTags = null, string? Instruction = null,
-    AiDepth Depth = AiDepth.Full, bool IncludeDuplicates = false, IReadOnlyList<string>? IgnoredFolders = null, bool UseDefaultIgnores = true);
+    AiDepth Depth = AiDepth.Full, bool IncludeDuplicates = false, IReadOnlyList<string>? IgnoredFolders = null, bool UseDefaultIgnores = true,
+    long? IntoSourceId = null, IReadOnlyList<string>? OnlyPaths = null);
 
 /// <summary>
 /// Stages an import (design D8): scan the inputs through the virtual file system, group files into assets with their
@@ -58,12 +59,18 @@ public sealed class ImportStager(
             IncludeDuplicates = request.IncludeDuplicates,
             IgnoredFolders = (request.IgnoredFolders ?? []).Select(FolderIgnoreRules.Normalize).Where(r => r.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
             UseDefaultIgnores = request.UseDefaultIgnores,
+            IntoSourceId = request.IntoSourceId,
+            OnlyPaths = request.OnlyPaths?.Select(OnlyKey).Distinct().ToList(),
         };
+        if (session.IntoSourceId is not null && (session.Inputs.Count != 1 || !Directory.Exists(session.Inputs[0])))
+            throw new ArgumentException("Importing into an existing source needs its folder as the only input.", nameof(request));
         await using var db = catalog.CreateDbContext();
         db.ImportSessions.Add(session);
         await db.SaveChangesAsync(ct);
         return session;
     }
+
+    private static string OnlyKey(string relativePath) => relativePath.Replace('\\', '/').Trim('/').ToLowerInvariant();
 
     /// <summary>A staged file before grouping.</summary>
     private sealed record Entry(SourceFile File, VfsNode Node);
@@ -89,6 +96,22 @@ public sealed class ImportStager(
         void Skip(Source? owner, string path, SkipKind kind, string reason, Location? location) =>
             skips.Add((new StagedSkip { SessionId = sessionId, Path = path, Kind = kind, Reason = reason, Location = location }, owner));
         var volumeIds = new HashSet<string?>();
+        // Importing a rescan's added files: only those paths, and everything inside the archives among them.
+        var only = session.OnlyPaths?.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var onlyOuter = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        bool Wanted(VfsNode node)
+        {
+            if (only is null) return true;
+            if (node.Location.IsInContainer) return onlyOuter.Contains(node.Location.OuterFile.ToString());
+            if (!only.Contains(OnlyKey(node.RelativePath))) return false;
+            if (node.Kind == VfsNodeKind.Container) onlyOuter.Add(node.Location.ToString());
+            return true;
+        }
+        string? intoName = null;
+        if (session.IntoSourceId is { } into)
+            await using (var db = catalog.CreateDbContext())
+                intoName = await db.Sources.Where(s => s.Id == into).Select(s => s.DisplayName).FirstOrDefaultAsync(ct)
+                    ?? throw new InvalidOperationException("The source to import into no longer exists.");
 
         progress.SetStage("Scanning", StageScan, stageCount);
         foreach (var input in session.Inputs)
@@ -99,7 +122,7 @@ public sealed class ImportStager(
             Source? root = null;
             if (Directory.Exists(full))
             {
-                root = NewSource(SourceKind.Folder, location, Path.GetFileName(full.TrimEnd('\\', '/')), sessionId, null);
+                root = NewSource(SourceKind.Folder, location, intoName ?? Path.GetFileName(full.TrimEnd('\\', '/')), sessionId, null);
                 sources[location.ToString()] = root;
                 roots.Add(root);
             }
@@ -112,6 +135,7 @@ public sealed class ImportStager(
             await foreach (var node in vfs.WalkAsync(full, location, ignore: ignore, ct: ct))
             {
                 ct.ThrowIfCancellationRequested();
+                if (!Wanted(node)) continue;
                 var parentKey = node.Location.Container?.ToString();
                 var parent = parentKey is not null ? sources.GetValueOrDefault(parentKey) : root;
                 switch (node.Kind)
@@ -121,6 +145,8 @@ public sealed class ImportStager(
                         var kind = node.ContainerKind ?? SourceKind.Archive;
                         var source = NewSource(kind, node.Location, Path.GetFileNameWithoutExtension(node.Location.FileName), sessionId, parent);
                         source.Store = node.Store ?? new StoreInfo();
+                        // What a rescan compares to tell whether the archive or package changed (spec "Rescan imported sources").
+                        if (!node.Location.IsInContainer && File.Exists(node.LocalPath)) source.Fingerprint = Fingerprint.ContentKey(node.LocalPath);
                         if (node.Store?.Title is { Length: > 0 } title) source.DisplayName = title;
                         sources[node.Location.ToString()] = source;
                         if (parent is null) roots.Add(source);
@@ -198,7 +224,7 @@ public sealed class ImportStager(
                     };
                     asset.Files.Add(FileOf(group.Primary, node, FileRole.Primary, null, null));
                     foreach (var link in group.Companions)
-                        asset.Files.Add(FileOf(link.File, byPath[link.File.RelativePath].Node, FileRole.Companion, link.Material, link.Slot));
+                        asset.Files.Add(FileOf(link.File, byPath[link.File.RelativePath].Node, FileRole.Companion, link.Material, link.Slot, link.Origin));
                     foreach (var tag in sharedTags) asset.Tags.Add(new AssetTag { Tag = tag, Origin = TagOrigin.Import });
                     source.Assets.Add(asset);
                     created.Add((asset, node));
@@ -221,7 +247,7 @@ public sealed class ImportStager(
             progress.SetCurrentItem("Checking for files already in the catalog...");
             await duplicates.MarkAsync(sessionId, session.IncludeDuplicates, ct);
             progress.SetCurrentItem("Looking for earlier versions of these sources...");
-            await versions.ProposeAsync(sessionId, ct);
+            if (session.IntoSourceId is null) await versions.ProposeAsync(sessionId, ct); // files added to a source are not a new version of it
             await db.ImportSessions.Where(s => s.Id == sessionId).ExecuteUpdateAsync(u => u.SetProperty(s => s.StagedThrough, StageGroup + 1), ct);
         }
         _log.LogInformation("Import {Session}: staged {Sources} sources, {Assets} assets, {Skips} skipped entries",
@@ -350,7 +376,8 @@ public sealed class ImportStager(
         ImportedAt = DateTime.UtcNow,
     };
 
-    private static AssetFile FileOf(SourceFile file, VfsNode node, FileRole role, string? material, string? slot) => new()
+    private static AssetFile FileOf(SourceFile file, VfsNode node, FileRole role, string? material, string? slot,
+        CompanionOrigin origin = CompanionOrigin.Reference) => new()
     {
         Role = role,
         Location = node.Location,
@@ -362,5 +389,6 @@ public sealed class ImportStager(
         UnityGuid = file.UnityGuid,
         Material = material,
         Slot = slot,
+        Origin = origin,
     };
 }

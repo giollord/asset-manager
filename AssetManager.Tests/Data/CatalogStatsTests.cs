@@ -140,4 +140,71 @@ public class LargeCatalogPerformanceTests(ITestOutputHelper output)
         Assert.True(collections.Single().Count > 0 && sources.Count == 101 && tags.Count == 2);
         Assert.True(statsTime < TimeSpan.FromSeconds(1), $"stats took {statsTime}");
     }
+
+    // ---- license audit (spec "License audit") ----
+
+    private static async Task<(TestCatalog Catalog, Dictionary<string, long> Sources)> AuditSeedAsync()
+    {
+        var c = await TestCatalog.CreateAsync();
+        var ids = new Dictionary<string, long>();
+        async Task Add(string name, int assets, LicenseInfo license, Func<int, Asset>? make = null) =>
+            ids[name] = (await TestData.SourceAsync(c, assets, s => { s.DisplayName = name; s.License = license; }, make)).Id;
+        await Add("Clean CC0", 4, new LicenseInfo { Kind = "CC0", Commercial = TriState.Yes, Attribution = TriState.No });
+        await Add("No kind", 3, new LicenseInfo { Commercial = TriState.Yes, Attribution = TriState.No });
+        await Add("Commercial unknown", 2, new LicenseInfo { Kind = "Custom", Commercial = TriState.Unknown });
+        await Add("Needs credit", 5, new LicenseInfo { Kind = "CC-BY 4.0", Commercial = TriState.Yes, Attribution = TriState.Yes, AttributionText = "  " });
+        await Add("Personal only", 2, new LicenseInfo { Kind = "Personal use", Commercial = TriState.No, Attribution = TriState.No });
+        // One asset with its own, different license; one with an override equal to the source's.
+        await Add("Mixed", 3, new LicenseInfo { Kind = "CC0", Commercial = TriState.Yes, Attribution = TriState.No }, i => new Asset
+        {
+            Name = $"m{i}",
+            HasLicenseOverride = i < 2,
+            LicenseOverride = i == 0
+                ? new LicenseInfo { Kind = "CC-BY-NC", Commercial = TriState.No, Attribution = TriState.Yes, AttributionText = "by X" }
+                : new LicenseInfo { Kind = "CC0", Commercial = TriState.Yes, Attribution = TriState.No },
+        });
+        return (c, ids);
+    }
+
+    [Fact]
+    public async Task License_audit_lists_each_problem_with_sources_and_counts_matching_browse()
+    {
+        var (c, ids) = await AuditSeedAsync();
+        await using var _ = c;
+        var search = new AssetSearchService(c.Store);
+        var audit = await new CatalogStatsService(c.Store, search).LicenseAuditAsync(Ct);
+
+        var byProblem = audit.ToDictionary(p => p.Problem);
+        Assert.Equal(["No kind", "Commercial unknown"], byProblem[LicenseProblem.UnknownLicense].Sources.Select(s => s.Name));
+        Assert.Equal((2, 5), (byProblem[LicenseProblem.UnknownLicense].SourceCount, byProblem[LicenseProblem.UnknownLicense].AssetCount));
+        Assert.Equal([("Needs credit", 5)], byProblem[LicenseProblem.AttributionMissing].Sources.Select(s => (s.Name, s.Assets)));
+        Assert.Equal([("Personal only", 2), ("Mixed", 1)], byProblem[LicenseProblem.NonCommercial].Sources.Select(s => (s.Name, s.Assets)));
+        Assert.Equal([("Mixed", 1)], byProblem[LicenseProblem.OverrideDiffers].Sources.Select(s => (s.Name, s.Assets)));
+        Assert.Equal("Unknown license", byProblem[LicenseProblem.UnknownLicense].Label);
+
+        // Every count equals what Browse lists for its drill-down.
+        foreach (var p in audit)
+        {
+            Assert.Equal(p.AssetCount, await search.CountAsync(p.Query));
+            foreach (var s in p.Sources) Assert.Equal(s.Assets, await search.CountAsync(s.Query));
+        }
+        Assert.Equal(ids["Needs credit"], byProblem[LicenseProblem.AttributionMissing].Sources[0].Query.SourceId);
+    }
+
+    [Fact]
+    public async Task Missing_attribution_text_disappears_after_an_edit()
+    {
+        var (c, ids) = await AuditSeedAsync();
+        await using var _ = c;
+        var stats = new CatalogStatsService(c.Store, new AssetSearchService(c.Store));
+        Assert.Contains((await stats.LicenseAuditAsync(Ct)).Single(p => p.Problem == LicenseProblem.AttributionMissing).Sources, s => s.Name == "Needs credit");
+
+        await new MetadataEditService(c.Store).EditSourceAsync(ids["Needs credit"], new AssetManager.Core.Domain.SourceUpdate
+        {
+            License = new LicenseInfo { Kind = "CC-BY 4.0", Commercial = TriState.Yes, Attribution = TriState.Yes, AttributionText = "Art by Jane Doe (CC-BY 4.0)" },
+        }, Ct);
+
+        // The edit raises the catalog change, so the cached audit is recomputed.
+        Assert.Empty((await stats.LicenseAuditAsync(Ct)).Single(p => p.Problem == LicenseProblem.AttributionMissing).Sources);
+    }
 }

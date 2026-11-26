@@ -25,11 +25,22 @@ public sealed record PreviewOptions : IValidatableObject
     [Display(Name = "Pixel-art detection")]
     public bool PixelArtDetection { get; init; } = true;
 
-    [Display(Name = "Pixel-art detection: maximum edge (px)")]
-    [Range(1, 4096)] public int PixelArtMaxEdge { get; init; } = 128;
+    // Measured pixel-art detection (design D4); replaces the old "maximum edge" and "maximum color count" rule.
 
-    [Display(Name = "Pixel-art detection: maximum color count")]
-    [Range(2, 4096)] public int PixelArtMaxColors { get; init; } = 64;
+    [Display(Name = "Pixel-art detection: share of colour changes on the pixel grid")]
+    [Range(0.5, 1.0)] public double PixelArtGridShare { get; init; } = 0.97;
+
+    [Display(Name = "Pixel-art detection: palette size (colours)")]
+    [Range(2, 4096)] public int PixelArtPaletteSize { get; init; } = 64;
+
+    [Display(Name = "Pixel-art detection: share of pixels in the palette")]
+    [Range(0.5, 1.0)] public double PixelArtPaletteShare { get; init; } = 0.98;
+
+    [Display(Name = "Pixel-art detection: maximum edge at native scale (px)")]
+    [Range(16, 16384)] public int PixelArtNativeMaxEdge { get; init; } = 1024;
+
+    [Display(Name = "Sprite sheet detection: minimum grid confidence")]
+    [Range(0.0, 1.0)] public double GridConfidenceThreshold { get; init; } = 0.6;
 
     [Display(Name = "Palette color count")]
     [Range(1, 16)] public int PaletteColors { get; init; } = 5;

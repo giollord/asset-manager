@@ -15,11 +15,11 @@
 
 @* Catalog location (spec "Change catalog location"), size and compaction. *@
 <MudPaper Class="pa-4" Outlined="true" id="catalog-settings">
-    <MudText Typo="Typo.h6" Class="mb-2">Catalog</MudText>
-    <MudText Typo="Typo.body2">Open catalog: <b id="catalog-path">@Catalog.Path</b></MudText>
+    <MudText Typo="Typo.h6" Class="mb-2">@Title</MudText>
+    <MudText Typo="Typo.body2">Open catalog: <b class="selectable" id="catalog-path">@Catalog.Path</b></MudText>
     @if (_size is { } size)
     {
-        <MudText Typo="Typo.body2" Class="mt-1" id="catalog-size">
+        <MudText Typo="Typo.body2" Class="mt-1 selectable" id="catalog-size">
             Size @AssetManager.Shared.Pages.Dashboard.Bytes(size.Total) — previews @AssetManager.Shared.Pages.Dashboard.Bytes(size.Previews), stored originals @AssetManager.Shared.Pages.Dashboard.Bytes(size.StoredOriginals), other @AssetManager.Shared.Pages.Dashboard.Bytes(size.Other)
         </MudText>
     }
@@ -37,6 +37,11 @@
 </MudPaper>
 
 @code {
+    public const string Title = "Catalog";
+
+    /// <summary>The section's title and setting names, for the Settings search (design D8).</summary>
+    public static readonly string[] SearchTerms = [Title, "Open catalog", "Size", "Compact catalog", "Open another catalog", "Catalog file"];
+
     private CatalogSize? _size;
     private string? _path;
     private bool _switching;

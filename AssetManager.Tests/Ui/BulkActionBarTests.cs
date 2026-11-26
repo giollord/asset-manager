@@ -24,6 +24,7 @@ public class BulkActionBarTests : BunitContext
         Services.AddMudServices();
         Services.AddSingleton(c.Store);
         Services.AddSingleton(new TagService(c.Store));
+        Services.AddSingleton(new MetadataEditService(c.Store));
         Services.AddSingleton(new DeletionService(c.Store));
         Services.AddSingleton<IJobQueue>(jobs);
         Services.AddSingleton(new ReimportService(jobs));
@@ -97,5 +98,33 @@ public class BulkActionBarTests : BunitContext
             await using var db = c.Db();
             return await db.AssetTags.CountAsync(t => t.Tag.Name == tag, Ct);
         }
+    }
+
+    [Fact]
+    public async Task Bulk_favourite_and_rate_apply_to_the_selection()
+    {
+        await using var c = await TestCatalog.CreateAsync();
+        var src = await TestData.SourceAsync(c, 25);
+        var selection = src.Assets.Take(20).Select(a => a.Id).ToList();
+        var (_, bar) = Render(c, selection);
+        var popovers = Render<MudPopoverProvider>();
+
+        // Spec "Bulk favourite".
+        bar.Find(".bulk-favorite button, button.bulk-favorite").Click();
+        popovers.WaitForElement(".bulk-favorite-add").Click();
+        await bar.WaitForAssertionAsync(async () =>
+        {
+            await using var db = c.Db();
+            Assert.Equal(20, await db.Assets.CountAsync(a => a.Favorite, Ct));
+        });
+
+        bar.Find(".bulk-rate button, button.bulk-rate").Click();
+        popovers.WaitForElement(".bulk-rate-4").Click();
+        await bar.WaitForAssertionAsync(async () =>
+        {
+            await using var db = c.Db();
+            Assert.Equal(20, await db.Assets.CountAsync(a => a.Rating == 4 && selection.Contains(a.Id), Ct));
+            Assert.Equal(0, await db.Assets.CountAsync(a => a.Rating != 0 && !selection.Contains(a.Id), Ct));
+        });
     }
 }

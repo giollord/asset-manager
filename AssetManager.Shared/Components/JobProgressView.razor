@@ -33,7 +33,7 @@
         </MudText>
         @if (!Compact && Job.State == JobState.Running && !string.IsNullOrEmpty(Job.CurrentItem))
         {
-            <MudText Typo="Typo.caption" Class="d-block job-item" Style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">@Job.CurrentItem</MudText>
+            <MudText Typo="Typo.caption" Class="d-block job-item selectable" Style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">@Job.CurrentItem</MudText>
         }
     }
 
@@ -46,7 +46,7 @@
     </MudText>
     @if (Job.Error is not null && !Compact)
     {
-        <MudText Typo="Typo.caption" Color="Color.Error" Class="d-block">@Job.Error</MudText>
+        <MudText Typo="Typo.caption" Color="Color.Error" Class="d-block job-error selectable">@Job.Error</MudText>
     }
 </div>
 

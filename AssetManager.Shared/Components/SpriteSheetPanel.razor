@@ -1,0 +1,324 @@
+@using AssetManager.Core.Domain
+@using AssetManager.Data.Services
+@using AssetManager.Shared.Services
+@using Microsoft.Extensions.DependencyInjection
+@implements IAsyncDisposable
+@inject MetadataEditService Edits
+@inject UiActions Ui
+@inject IJSRuntime JS
+@inject IServiceProvider Services
+
+@* Sprite sheet review (spec "Grid review and correction" and "Frame viewer", design D5): the grid over the sheet, its
+   editor, and a frame player working from the stored preview only. *@
+<MudPaper Outlined="true" Class="pa-2 mt-2" id="details-sprite">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+        <MudText Typo="Typo.body2" HtmlTag="div" Style="flex: 1" id="sprite-summary">
+            @if (Asset.SpriteSheet is { } s)
+            {
+                <span>Sprite sheet: <b>@s.FrameCount frames</b>@(s.Grid is { } g ? $" of {g.CellW} × {g.CellH} ({g.Columns} × {g.Rows})" : " (atlas)")</span>
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" title="How the frames were found">@Origin(s.DetectedBy)</MudChip>
+            }
+            else if (Asset.GridUncertain)
+            {
+                <span>Looks like several sprites, but no grid was certain.</span>
+                <MudChip T="string" Size="Size.Small" Color="Color.Warning">grid uncertain</MudChip>
+            }
+            else
+            {
+                <span class="mud-text-secondary">Not a sprite sheet.</span>
+            }
+        </MudText>
+        <MudSwitch T="bool" Value="_isSheet" ValueChanged="ToggleAsync" Color="Color.Primary" Label="Sprite sheet" id="sprite-is-sheet"
+                   title="Mark this image as a sprite sheet or not; your choice is kept" />
+    </MudStack>
+
+    @if (_isSheet)
+    {
+        <div class="preview-surface mt-1" style="display: flex; justify-content: center; border-radius: 4px; max-height: 360px; overflow: auto">
+            <canvas @ref="_overlay" id="sprite-overlay" style="max-width: 100%; max-height: 340px; object-fit: contain"></canvas>
+        </div>
+
+        <MudText Typo="Typo.caption" HtmlTag="div" Class="mt-2">Grid (original pixels)</MudText>
+        <div class="sprite-grid-fields">
+            @Field("Cell width", "sprite-cell-w", _g.CellW, v => Resize(_g with { CellW = v }), 1)
+            @Field("Cell height", "sprite-cell-h", _g.CellH, v => Resize(_g with { CellH = v }), 1)
+            @Field("Offset X", "sprite-offset-x", _g.OffsetX, v => Resize(_g with { OffsetX = v }), 0)
+            @Field("Offset Y", "sprite-offset-y", _g.OffsetY, v => Resize(_g with { OffsetY = v }), 0)
+            @Field("Spacing X", "sprite-spacing-x", _g.SpacingX, v => Resize(_g with { SpacingX = v }), 0)
+            @Field("Spacing Y", "sprite-spacing-y", _g.SpacingY, v => Resize(_g with { SpacingY = v }), 0)
+            @Field("Columns", "sprite-columns", _g.Columns, v => Set(_g with { Columns = v }, null), 1)
+            @Field("Rows", "sprite-rows", _g.Rows, v => Set(_g with { Rows = v }, null), 1)
+            @Field("Frames", "sprite-frame-count", _frameCount, v => Set(_g, v), 1)
+        </div>
+        @if (Problem is { } problem)
+        {
+            <MudText Typo="Typo.caption" Color="Color.Error" id="sprite-grid-problem">@problem</MudText>
+        }
+        @if (_dirty)
+        {
+            <MudStack Row="true" Justify="Justify.FlexEnd" Spacing="1" Class="mt-1">
+                <MudButton Size="Size.Small" OnClick="ResetEdits" id="sprite-grid-reset">Reset</MudButton>
+                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveAsync" Disabled="Problem is not null" id="sprite-grid-save">Save grid</MudButton>
+            </MudStack>
+        }
+
+        @if (Asset.SpriteSheet is { Frames.Count: > 0 } && Image is not null)
+        {
+            <MudText Typo="Typo.caption" HtmlTag="div" Class="mt-2">Frames</MudText>
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+                <div class="preview-surface" style="width: 200px; height: 200px; display: flex; align-items: center; justify-content: center; border-radius: 4px">
+                    <canvas @ref="_viewer" id="sprite-viewer"></canvas>
+                </div>
+                <MudStack Spacing="1" Style="min-width: 180px; flex: 1">
+                    @if (Asset.SpriteSheet.Grid is { } grid)
+                    {
+                        <MudSelect T="int" Value="_row" ValueChanged="SetRowAsync" Label="Row" Margin="Margin.Dense" Dense="true" id="sprite-row">
+                            @for (var r = 0; r < grid.Rows; r++)
+                            {
+                                var row = r;
+                                <MudSelectItem T="int" Value="row">Row @(row + 1)</MudSelectItem>
+                            }
+                        </MudSelect>
+                    }
+                    else
+                    {
+                        <MudStack Row="true" Spacing="1">
+                            <MudNumericField T="int" Value="_from + 1" ValueChanged="v => SetRangeAsync(v - 1, _to)" Min="1" Max="Asset.SpriteSheet.FrameCount" Label="From" Margin="Margin.Dense" id="sprite-from" />
+                            <MudNumericField T="int" Value="_to + 1" ValueChanged="v => SetRangeAsync(_from, v - 1)" Min="1" Max="Asset.SpriteSheet.FrameCount" Label="To" Margin="Margin.Dense" id="sprite-to" />
+                        </MudStack>
+                    }
+                    <MudSlider T="int" Value="_fps" ValueChanged="SetFpsAsync" Min="1" Max="30" Size="Size.Small" id="sprite-fps">@_fps fps</MudSlider>
+                    <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="TogglePlayAsync" id="sprite-play"
+                               StartIcon="@(_playing ? Icons.Material.Filled.Stop : Icons.Material.Filled.PlayArrow)">@(_playing ? "Stop" : "Play")</MudButton>
+                    <MudMenu Label="Export" Size="Size.Small" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.SaveAlt" id="sprite-export" Disabled="_exporting"
+                             title="Cut frames from the original at full size (its drive must be attached)">
+                        <MudMenuItem OnClick="() => ExportPngsAsync(PlayIndexes())" Class="sprite-export-shown">These frames as PNG files</MudMenuItem>
+                        <MudMenuItem OnClick="() => ExportPngsAsync(Enumerable.Range(0, Asset.SpriteSheet.FrameCount).ToList())" Class="sprite-export-all">All frames as PNG files</MudMenuItem>
+                        <MudMenuItem OnClick="ExportAnimationAsync" Class="sprite-export-animation">These frames as animated WebP (@_fps fps)</MudMenuItem>
+                    </MudMenu>
+                </MudStack>
+            </MudStack>
+        }
+    }
+</MudPaper>
+
+@code {
+    private const string Module = "./_content/AssetManager.Shared/js/spriteViewer.js";
+
+    [Parameter, EditorRequired] public Asset Asset { get; set; } = null!;
+
+    /// <summary>The stored sheet image (sprite-sheet preview or thumbnail).</summary>
+    [Parameter] public PreviewData? Image { get; set; }
+
+    private IJSObjectReference? _module;
+    private ElementReference _overlay;
+    private ElementReference _viewer;
+    private bool _isSheet;
+    private SpriteGrid _g = new();
+    private int _frameCount;
+    private bool _dirty;
+    private int _row;
+    private int _from;
+    private int _to;
+    private int _fps = 12;
+    private bool _playing;
+    private (long Id, DateTime Updated)? _loaded;
+    private bool _redraw;
+
+    private int Width => Asset.Image?.Width ?? 0;
+    private int Height => Asset.Image?.Height ?? 0;
+
+    private string? Problem =>
+        !_g.FitsIn(Width, Height) ? $"The grid does not fit the {Width} × {Height} image."
+        : _frameCount < 1 || _frameCount > _g.Columns * _g.Rows ? $"Frames must be between 1 and {_g.Columns * _g.Rows}."
+        : null;
+
+    protected override void OnParametersSet()
+    {
+        if (_loaded == (Asset.Id, Asset.UpdatedAt)) return;
+        _loaded = (Asset.Id, Asset.UpdatedAt);
+        _isSheet = Asset.SpriteSheet is not null;
+        ResetEdits();
+        var count = Asset.SpriteSheet?.FrameCount ?? 0;
+        _row = Math.Min(_row, Math.Max(0, (Asset.SpriteSheet?.Grid?.Rows ?? 1) - 1));
+        (_from, _to) = (0, Math.Max(0, count - 1));
+        _playing = false;
+        _redraw = true;
+    }
+
+    private void ResetEdits()
+    {
+        var sheet = Asset.SpriteSheet;
+        _g = sheet?.Grid ?? Default();
+        _frameCount = sheet?.Grid is not null ? sheet.FrameCount : _g.Columns * _g.Rows;
+        _dirty = false;
+        _redraw = true;
+    }
+
+    /// <summary>A starting grid for a sheet without one: square cells of the shorter edge.</summary>
+    private SpriteGrid Default()
+    {
+        var edge = Math.Max(1, Math.Min(Width, Height));
+        return new SpriteGrid { CellW = edge, CellH = edge }.FitTo(Width, Height);
+    }
+
+    /// <summary>Cell size, offset or spacing changed: as many columns and rows as fit, and all their frames.</summary>
+    private void Resize(SpriteGrid g)
+    {
+        var fitted = g.FitTo(Width, Height);
+        Set(fitted, fitted.Columns * fitted.Rows);
+    }
+
+    private void Set(SpriteGrid g, int? frames)
+    {
+        _g = g;
+        _frameCount = frames ?? g.Columns * g.Rows;
+        _dirty = true;
+        _redraw = true;
+    }
+
+    private RenderFragment Field(string label, string id, int value, Action<int> changed, int min) => __builder =>
+    {
+        <MudNumericField T="int" Value="value" ValueChanged="changed" Min="min" Label="@label" Margin="Margin.Dense" Variant="Variant.Outlined" id="@id" />
+    };
+
+    private static string Origin(GridDetectedBy by) => by switch
+    {
+        GridDetectedBy.SlicingData => "slicing data",
+        GridDetectedBy.User => "set by you",
+        _ => "detected",
+    };
+
+    private async Task ToggleAsync(bool on)
+    {
+        _isSheet = on;
+        if (on)
+        {
+            ResetEdits();
+            _dirty = Asset.SpriteSheet is null; // a new grid needs saving
+            return;
+        }
+        if (Asset.SpriteSheet is not null || Asset.Type == AssetType.SpriteSheet || Asset.GridUncertain)
+            await Ui.RunAsync(() => Edits.SetSpriteSheetAsync(Asset.Id, null), "Marked as not a sprite sheet.");
+    }
+
+    private Task SaveAsync() => Ui.RunAsync(() => Edits.SetSpriteSheetAsync(Asset.Id, _g, _frameCount), "Sprite sheet grid saved.");
+
+    // ---- drawing ----
+
+    /// <summary>The frames shown over the sheet: the edited grid while editing, else the stored frames.</summary>
+    private IReadOnlyList<SpriteFrame> OverlayFrames() =>
+        _dirty && Problem is null ? SpriteSheetMetadata.FromGrid(_g, _frameCount, GridDetectedBy.User).Frames : Asset.SpriteSheet?.Frames ?? [];
+
+    /// <summary>The frames played: the chosen row of a grid, or the chosen range of an atlas.</summary>
+    internal IReadOnlyList<SpriteFrame> PlayFrames() => Asset.SpriteSheet is { } s ? PlayIndexes().Select(i => s.Frames[i]).ToList() : [];
+
+    /// <summary>Indexes (into the sheet's frames) of the chosen row or range.</summary>
+    private List<int> PlayIndexes()
+    {
+        if (Asset.SpriteSheet is not { Frames.Count: > 0 } s) return [];
+        if (s.Grid is { } g)
+            return Enumerable.Range(0, s.Frames.Count).Where(i => (s.Frames[i].Y - g.OffsetY) / (g.CellH + g.SpacingY) == _row).ToList();
+        var from = Math.Clamp(_from, 0, s.Frames.Count - 1);
+        var to = Math.Clamp(_to, from, s.Frames.Count - 1);
+        return Enumerable.Range(from, to - from + 1).ToList();
+    }
+
+    // ---- export (spec "Frame export") ----
+
+    private bool _exporting;
+
+    private async Task<string?> PickFolderAsync() =>
+        await Services.GetRequiredService<AssetManager.Core.Platform.IFolderPicker>().PickFolderAsync();
+
+    private async Task ExportPngsAsync(List<int> frames)
+    {
+        if (await PickFolderAsync() is not { } folder) return;
+        _exporting = true;
+        try
+        {
+            IReadOnlyList<string> written = [];
+            if (await Ui.RunAsync(async () => { written = await Services.GetRequiredService<AssetManager.Processing.Export.SpriteFrameExporter>()
+                    .ExportPngsAsync(Asset.Id, frames, folder); }))
+                await Ui.RunAsync(() => Services.GetRequiredService<AssetManager.Core.Platform.IShellService>().RevealAsync(written[0]),
+                    $"Exported {written.Count} frame{(written.Count == 1 ? "" : "s")}.");
+        }
+        finally
+        {
+            _exporting = false;
+        }
+    }
+
+    private async Task ExportAnimationAsync()
+    {
+        if (await PickFolderAsync() is not { } folder) return;
+        var suffix = Asset.SpriteSheet?.Grid is not null ? $"row{_row + 1}" : $"frames{_from + 1}-{_to + 1}";
+        _exporting = true;
+        try
+        {
+            string path = "";
+            if (await Ui.RunAsync(async () => { path = await Services.GetRequiredService<AssetManager.Processing.Export.SpriteFrameExporter>()
+                    .ExportAnimationAsync(Asset.Id, PlayIndexes(), _fps, Path.Combine(folder, $"{Asset.Name}_{suffix}.webp")); }))
+                await Ui.RunAsync(() => Services.GetRequiredService<AssetManager.Core.Platform.IShellService>().RevealAsync(path), "Animation exported.");
+        }
+        finally
+        {
+            _exporting = false;
+        }
+    }
+
+    private bool Pixelated => Asset.Image?.IsPixelArt == true;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_redraw || !_isSheet || Image is null) return;
+        _redraw = false;
+        _module ??= await JS.InvokeAsync<IJSObjectReference>("import", Module);
+        await _module.InvokeVoidAsync("overlay", _overlay, Image.DataUrl, OverlayFrames(), Width, Pixelated);
+        if (_playing) await StartAsync();
+    }
+
+    private async Task StartAsync()
+    {
+        if (_module is null || Image is null) return;
+        await _module.InvokeVoidAsync("play", _viewer, Image.DataUrl, PlayFrames(), Width, _fps, Pixelated, 192);
+    }
+
+    private async Task TogglePlayAsync()
+    {
+        _playing = !_playing;
+        if (_module is null) return;
+        if (_playing) await StartAsync();
+        else await _module.InvokeVoidAsync("stop", _viewer);
+    }
+
+    private async Task SetRowAsync(int row)
+    {
+        _row = row;
+        if (_playing) await StartAsync();
+    }
+
+    private async Task SetRangeAsync(int from, int to)
+    {
+        (_from, _to) = (Math.Max(0, from), Math.Max(from, to));
+        if (_playing) await StartAsync();
+    }
+
+    private async Task SetFpsAsync(int fps)
+    {
+        _fps = Math.Clamp(fps, 1, 30);
+        if (_playing) await StartAsync();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_module is null) return;
+        try
+        {
+            await _module.InvokeVoidAsync("stop", _viewer);
+            await _module.DisposeAsync();
+        }
+        catch (JSDisconnectedException) { }
+        catch (ObjectDisposedException) { }
+    }
+}

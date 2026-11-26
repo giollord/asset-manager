@@ -35,6 +35,13 @@ public sealed class ImportKit : IAsyncDisposable
     public SourceVersions Versions { get; private set; } = null!;
     public ReimportService Reimports { get; private set; } = null!;
     public ImportReviewService Review { get; private set; } = null!;
+    public AssetManager.Processing.Sync.RescanService Rescan { get; private set; } = null!;
+
+    /// <summary>The app settings file the library scan reads (library folders, startup check).</summary>
+    public IAppSettingsStore SettingsStore { get; private set; } = null!;
+
+    /// <summary>The app settings the enricher reads (consensus thresholds); tests may change them.</summary>
+    public AppSettings AppSettings { get; } = new();
     private AiRuntime _runtime = null!;
 
     /// <param name="chat">The AI; null means no model is installed.</param>
@@ -54,6 +61,7 @@ public sealed class ImportKit : IAsyncDisposable
             new CompanionResolver(), kit.Previews, previewSettings, new DuplicateDetector(store, kit.Processing.Resolver), kit.Versions) { Parallelism = 2 };
         var settings = new JsonAppSettingsStore(Path.Combine(kit.Catalog.Dir.Path, "settings.json"));
         if (chatAvailable is not null) settings.Update(s => s.ChatModelPath = Path.Combine(kit.Catalog.Dir.Path, "model.gguf"));
+        kit.SettingsStore = settings;
         kit._runtime = new AiRuntime(settings);
         var late = new LateQueue();
         kit.Ai = new AiQueue(store, kit._runtime, late, kit.Hub);
@@ -63,9 +71,14 @@ public sealed class ImportKit : IAsyncDisposable
             Chat = () => chat is null || chatAvailable?.Invoke() == false ? null : new GatedChatClient(chat, kit.Ai),
             Modalities = () => modalities ?? new AiModalities(true, false),
             Parallelism = () => parallelism,
+            Settings = () => kit.AppSettings,
         };
         kit.Jobs = new JobQueue(store, [new ImportJob(store, kit.Stager, kit.Enricher), new ImportCommitJob(store, late, kit.Versions),
-            new ReimportJob(store, kit.Processing.Resolver, kit.Previews, previewSettings, late), new EnrichAssetsJob(kit.Enricher)], kit.Hub);
+            new ReimportJob(store, kit.Processing.Resolver, kit.Previews, previewSettings, late), new EnrichAssetsJob(kit.Enricher),
+            new ConsensusJob(kit.Enricher), new AssetManager.Processing.Jobs.RedetectSpritesJob(kit.Previews, store),
+            new AssetManager.Processing.Sync.RescanJob(kit.Rescan = new AssetManager.Processing.Sync.RescanService(store, kit.Processing.Resolver, classification, kit.Processing.Readers)),
+            new AssetManager.Processing.Sync.LibraryScanJob(new AssetManager.Processing.Sync.LibraryScanService(store, kit.Processing.Resolver, settings,
+                classification, kit.Processing.Readers, kit.Versions))], kit.Hub);
         late.Target = kit.Jobs;
         await kit.Jobs.StartAsync();
         kit.Imports = new ImportService(store, kit.Stager, kit.Jobs);

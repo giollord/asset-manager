@@ -22,8 +22,8 @@ public sealed class ImageHandler : AssetTypeHandlerBase
         {
             using var image = Load(item.PrimaryPath, item.Extension);
             var colors = CountColors(image);
-            var maxEdge = Math.Max(image.Width, image.Height);
             var hasAlpha = image.HasAlpha && !image.IsOpaque;
+            var pixelArt = options.PixelArtDetection ? PixelArtAnalyzer.Analyze(image, options) : null;
             item.Asset.Image = new ImageMetadata
             {
                 Width = (int)image.Width,
@@ -31,11 +31,16 @@ public sealed class ImageHandler : AssetTypeHandlerBase
                 HasAlpha = hasAlpha,
                 Format = FormatName(image, item.Extension),
                 ColorCount = colors,
-                IsPixelArt = options.PixelArtDetection && (maxEdge <= options.PixelArtMaxEdge || colors <= options.PixelArtMaxColors),
+                IsPixelArt = pixelArt?.IsPixelArt ?? false,
+                PixelScale = pixelArt?.Scale,
                 Frames = item.Extension == ".gif" ? CountFrames(item.PrimaryPath) : null,
             };
             if (!item.Asset.UserEdited.HasFlag(EditedFields.Colors))
                 item.Asset.Colors = Palette(image, options.PaletteColors);
+            if (!item.Asset.UserEdited.HasFlag(EditedFields.Style))
+                item.Asset.Style = PixelArtRules.Style(item.Asset, item.Asset.Style);
+            // Sprite sheet (design D3): slicing data next to the file, else the grid detector. User edits are final.
+            Sprites.SpriteSheetClassifier.Detect(item.Asset, item.PrimaryPath, image, options);
         }, ct);
 
     public override Task<IReadOnlyList<PreviewOutput>> GeneratePreviewsAsync(HandlerItem item, PreviewOptions options, CancellationToken ct = default) =>
@@ -60,14 +65,42 @@ public sealed class ImageHandler : AssetTypeHandlerBase
             }
 
             var pixelArt = item.Asset.Image?.IsPixelArt ?? false;
+            var sheet = SheetPreview(item.Asset, image, options, pixelArt);
             if (maxEdge > options.ImageMaxEdge)
             {
                 var geometry = new MagickGeometry((uint)options.ImageMaxEdge, (uint)options.ImageMaxEdge);
                 if (pixelArt) image.FilterType = FilterType.Point; // keep hard pixel edges
                 image.Resize(geometry);
             }
-            return [Encode(image, PreviewKind.Thumbnail, options.ImageQuality)];
+            var thumbnail = Encode(image, PreviewKind.Thumbnail, options.ImageQuality);
+            return sheet is null ? [thumbnail] : [thumbnail, sheet];
         }, ct);
+
+    /// <summary>Smallest legible frame edge in the stored sprite-sheet preview (design D5).</summary>
+    public const int MinCellPreviewPx = 64;
+
+    /// <summary>
+    /// A second, larger preview of a sprite sheet whose thumbnail would show fewer than 64 px per cell, so frames stay
+    /// legible offline: at least 64 px per cell, capped at 4096 px and at the original size.
+    /// </summary>
+    internal static PreviewOutput? SheetPreview(Asset asset, MagickImage image, PreviewOptions options, bool pixelArt)
+    {
+        if (asset.SpriteSheet is not { Frames.Count: > 0 } sheet) return null;
+        var maxEdge = (double)Math.Max(image.Width, image.Height);
+        var cell = sheet.Frames.Min(f => Math.Min(f.W, f.H));
+        var thumbScale = Math.Min(1, options.ImageMaxEdge / maxEdge);
+        if (cell * thumbScale >= MinCellPreviewPx) return null;
+        var scale = Math.Min(1, Math.Min((double)MinCellPreviewPx / Math.Max(1, cell), 4096 / maxEdge));
+        if (scale <= thumbScale) return null; // no sharper than the thumbnail
+        using var copy = (MagickImage)image.Clone();
+        if (scale < 1)
+        {
+            if (pixelArt) copy.FilterType = FilterType.Point;
+            copy.Resize((uint)Math.Max(1, Math.Round(image.Width * scale)), (uint)Math.Max(1, Math.Round(image.Height * scale)));
+        }
+        if (pixelArt) copy.Settings.SetDefine(MagickFormat.WebP, "lossless", true);
+        return Encode(copy, PreviewKind.SpriteSheet, pixelArt ? 100 : options.ImageQuality);
+    }
 
     /// <summary>Encodes as lossy WebP keeping the alpha channel.</summary>
     internal static PreviewOutput Encode(MagickImage image, PreviewKind kind, int quality, int index = 0)
@@ -125,7 +158,7 @@ public sealed class ImageHandler : AssetTypeHandlerBase
     };
 
     /// <summary>Dominant colors by quantization, ignoring transparent pixels; weights sum to 1.</summary>
-    internal static List<ColorInfo> Palette(MagickImage image, int count)
+    public static List<ColorInfo> Palette(MagickImage image, int count)
     {
         using var small = (MagickImage)image.Clone();
         small.Sample(new MagickGeometry(128, 128)); // nearest neighbour: no blended edge colors

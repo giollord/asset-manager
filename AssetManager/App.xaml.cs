@@ -12,6 +12,6 @@ public partial class App : Application
 
     protected override Window CreateWindow(IActivationState? activationState)
     {
-        return new Window(new MainPage(_drops)) { Title = "AssetManager" };
+        return new Window(new MainPage(_drops)) { Title = "Asset Manager" };
     }
 }

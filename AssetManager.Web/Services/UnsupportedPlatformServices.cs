@@ -6,8 +6,11 @@ namespace AssetManager.Web.Services;
 /// Dev-host stubs: the browser cannot reach the OS clipboard file list, native pickers or Explorer,
 /// so every call reports "not supported" (surfaced to the user as a snackbar by UiActions).
 /// </summary>
-public sealed class UnsupportedPlatformServices : IClipboardFileService, IFolderPicker, IFilePicker, IShellService
+public sealed class UnsupportedPlatformServices : IClipboardFileService, IFolderPicker, IFilePicker, IShellService, IDragOutService
 {
+    /// <summary>No native drag in a browser tab: cards keep the normal HTML drag (no files).</summary>
+    public bool IsSupported => false;
+
     public Task SetFilesAsync(IReadOnlyList<string> paths, CancellationToken ct = default) =>
         throw new PlatformFeatureNotSupportedException("Copying files to the clipboard");
 

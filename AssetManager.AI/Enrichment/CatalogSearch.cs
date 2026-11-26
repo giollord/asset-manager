@@ -10,13 +10,18 @@ namespace AssetManager.AI.Enrichment;
 /// <see cref="SearchQuery.Semantic"/> or <see cref="SearchQuery.SimilarTo"/> — ranking by embedding similarity
 /// (KNN in the vector index), after which the other filters still apply.
 /// </summary>
-public sealed class CatalogSearch(CatalogStore catalog, AssetSearchService words, EmbeddingService embeddings, IVectorIndex index)
+public sealed class CatalogSearch(CatalogStore catalog, AssetSearchService words, EmbeddingService embeddings, IVectorIndex index,
+    ImageQueryCache? images = null)
 {
+    /// <summary>How many of the nearest results a search by image re-ranks by palette (design D6).</summary>
+    public const int ImageRerankCount = 200;
+
     /// <summary>How many nearest neighbours a semantic search considers before filtering.</summary>
     public int Neighbours { get; init; } = 2000;
 
     /// <summary>True when the query ranks by meaning (it needs the embedding model, or an embedded asset for "find similar").</summary>
-    public static bool IsSemantic(SearchQuery q) => q.SimilarTo is not null || (q.Semantic && !string.IsNullOrWhiteSpace(q.Text));
+    public static bool IsSemantic(SearchQuery q) =>
+        q.SimilarTo is not null || q.ImageQueryId is not null || (q.Semantic && !string.IsNullOrWhiteSpace(q.Text));
 
     public bool SemanticAvailable => embeddings.IsAvailable;
 
@@ -35,7 +40,13 @@ public sealed class CatalogSearch(CatalogStore catalog, AssetSearchService words
     private async Task<List<long>> RankAsync(SearchQuery query, CancellationToken ct)
     {
         float[]? vector;
-        if (query.SimilarTo is { } similar)
+        ImageQuery? image = null;
+        if (query.ImageQueryId is { } imageId)
+        {
+            image = images?.Get(imageId) ?? throw new ImageQueryExpiredException();
+            vector = image.Vector;
+        }
+        else if (query.SimilarTo is { } similar)
         {
             await using var db = catalog.CreateDbContext();
             var stored = await db.Embeddings.AsNoTracking().Where(e => e.AssetId == similar).Select(e => e.Vector).FirstOrDefaultAsync(ct);
@@ -51,8 +62,20 @@ public sealed class CatalogSearch(CatalogStore catalog, AssetSearchService words
         var hits = await index.SearchAsync(vector, Neighbours, ct);
         var candidates = hits.Where(h => h.AssetId != query.SimilarTo).ToList();
         // Every other filter applies to the neighbours; the words of a semantic query rank instead of filtering.
-        var filters = query with { Text = null, Semantic = false, SimilarTo = null };
+        var filters = query with { Text = null, Semantic = false, SimilarTo = null, ImageQueryId = null };
         var allowed = await words.MatchingIdsAsync(filters, candidates.Select(h => h.AssetId).ToList(), ct);
-        return candidates.Where(h => allowed.Contains(h.AssetId)).OrderBy(h => h.Distance).Select(h => h.AssetId).ToList();
+        var ranked = candidates.Where(h => allowed.Contains(h.AssetId)).OrderBy(h => h.Distance).ToList();
+        if (image is null) return ranked.Select(h => h.AssetId).ToList();
+
+        // Search by image: the nearest results are re-ranked by 0.8 · cosine + 0.2 · palette similarity.
+        var top = ranked.Take(ImageRerankCount).ToList();
+        var topIds = top.Select(h => h.AssetId).ToList();
+        await using var colorsDb = catalog.CreateDbContext();
+        var colors = (await colorsDb.Assets.AsNoTracking().Where(a => topIds.Contains(a.Id)).Select(a => new { a.Id, a.Colors }).ToListAsync(ct))
+            .ToDictionary(a => a.Id, a => a.Colors);
+        var reranked = top
+            .OrderByDescending(h => PaletteSimilarity.Score(1 - h.Distance, PaletteSimilarity.Of(image.Palette, colors.GetValueOrDefault(h.AssetId) ?? [])))
+            .Select(h => h.AssetId);
+        return reranked.Concat(ranked.Skip(ImageRerankCount).Select(h => h.AssetId)).ToList();
     }
 }

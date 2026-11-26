@@ -20,6 +20,7 @@ public class ReimportTests
         coin.Tags.Add(new AssetTag { Tag = (await TagService.GetOrCreateAsync(db, ["favorite"], ct)).Single(), Origin = TagOrigin.User });
         coin.Description = "My lucky coin.";
         coin.UserEdited |= EditedFields.Description;
+        (coin.Rating, coin.Notes, coin.Favorite) = (4, "use for level 2 rocks", true);
         await db.SaveChangesAsync(ct);
         var preview = await db.Previews.Where(p => p.AssetId == coin.Id && p.Kind == PreviewKind.Thumbnail).Select(p => p.Bytes).SingleAsync(ct);
 
@@ -70,5 +71,7 @@ public class ReimportTests
         Assert.Equal("My lucky coin.", coin.Description);                       // user edit kept
         Assert.Contains(coin.Tags, t => t.Tag.Name == "favorite" && t.Origin == TagOrigin.User);
         Assert.Contains(coin.Tags, t => t.Tag.Name == "ai-tag" && t.Origin == TagOrigin.AI);
+        // Spec "Rating survives re-import".
+        Assert.Equal((4, "use for level 2 rocks", true), (coin.Rating, coin.Notes, coin.Favorite));
     }
 }

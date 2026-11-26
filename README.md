@@ -1,3 +1,5 @@
+<p align="center"><img src="branding/logo.svg" width="160" alt="Asset Manager logo: a sci-fi crate and a metal trash bin with an old wooden barrel lying across them"></p>
+
 # Asset Manager
 
 [![Build](https://github.com/giollord/asset-manager/actions/workflows/build.yml/badge.svg)](https://github.com/giollord/asset-manager/actions/workflows/build.yml)
@@ -6,9 +8,22 @@ A local, offline-first catalog for game assets on Windows: 3D models, animations
 
 The specification lives in [`openspec/specs`](openspec/specs), one folder per capability. The original proposal, design (decisions D1–D11) and task list are archived in [`openspec/changes/archive/2026-11-24-build-asset-manager`](openspec/changes/archive/2026-11-24-build-asset-manager); later changes are under [`openspec/changes`](openspec/changes).
 
+## Screenshots
+
+![Browse: a search by meaning for "colorful game props" limited to 3D models, showing a grid of blasters, barrels and banners, with type, tag, license and availability filters on the left](docs/screenshots/browse.png)
+
+| | | |
+|---|---|---|
+| ![Asset details of a blaster model: a turntable of its stored renders, orientation controls, the AI description, tags and the CC0 license](docs/screenshots/details-model.png) | ![Dashboard: catalog totals, assets by type, AI enrichment, availability, licenses, the license audit and model issues](docs/screenshots/dashboard.png) | ![Import review: a staged pirate pack with its detected CC0 license, an AI description and previews of the models to include](docs/screenshots/import-review.png) |
+| Asset details | Dashboard | Import review |
+
+The screenshots show free CC0 packs by [Kenney](https://kenney.nl).
+
 ## Download
 
 Get `AssetManager-<version>-win-x64-portable.zip` from the [Releases](https://github.com/giollord/asset-manager/releases) page, extract it anywhere (a local folder, a USB stick, the external drive that holds your assets), and run `AssetManager.exe`. Nothing needs to be installed: the package includes .NET, the Windows App SDK, the AI runtime and FFmpeg; only the WebView2 runtime that ships with Windows 10 and 11 is used from the system. The app keeps all its data in the `data` folder next to it (see [Data folder](#data-folder)). The AI models are not included; download them in Settings → AI model.
+
+The app works fully offline. It goes online only in two cases, both started by you: downloading an AI model in Settings → AI model, and the update check in Settings → About. The update check is off by default. When turned on, it asks GitHub once a day at startup (or when you press "Check now") for the latest release, sending nothing but the request itself, and shows "x.y.z available" with a link to the release page. It never downloads or installs anything; to update, extract the new zip to a new folder and move the old `data` folder into it.
 
 ## Building from source
 
@@ -51,7 +66,7 @@ Test classes that start a real model server belong to the non-parallel `AiModelC
 
 ## Data folder
 
-Everything the app creates lives in one data folder: the default catalog (`catalog.amdb`), `settings.json`, downloaded AI models (`models`), the extraction cache (`cache`), temporary files (`temp`), logs (`logs`) and the embedded browser profile (`webview`). Settings → About shows the folder in use, the mode and an "Open folder" button.
+Everything the app creates lives in one data folder: the default catalog (`catalog.amdb`), `settings.json`, catalog backups (`backups`), downloaded AI models (`models`), the extraction cache (`cache`), temporary files (`temp`), logs (`logs`) and the embedded browser profile (`webview`). Settings → About shows the folder in use, the mode and an "Open folder" button.
 
 | Mode | When | Data folder |
 |---|---|---|
@@ -64,12 +79,18 @@ Paths in `settings.json` that point inside the data folder (the catalog and mode
 
 To use an existing catalog from a portable copy (for example the one in `%LOCALAPPDATA%\AssetManager` from a build run from source), either copy `catalog.amdb` and the `models` folder into the portable `data` folder before the first start, or open it with Settings → Catalog → "Open another catalog" and pick the model files in Settings → AI model.
 
+### Catalog backups
+
+The app backs up the open catalog to the `backups` folder (Settings → Backups can move it, for example to another drive). Each backup is a complete catalog file named after the catalog and the time, such as `catalog-20261124-093000-auto.amdb`, taken as of one moment even while imports or AI enrichment keep writing. By default a backup is made at startup when the last one is more than a day old; this can be changed to weekly or turned off. The 5 newest automatic backups are kept (configurable); backups made with "Back up now" are never deleted automatically. A backup is written to a `.tmp` file first and needs free space for a copy of the catalog, so a full drive or a crash never leaves a broken backup.
+
+To go back to a backup, choose "Restore" next to it in Settings → Backups. Running jobs are cancelled, the current catalog is saved as a manual backup first, and the app then reopens the catalog from the backup. A backup can also be opened directly with Settings → Catalog → "Open another catalog".
+
 ## Continuous integration and releases
 
 [`.github/workflows/build.yml`](.github/workflows/build.yml) runs on GitHub Actions (`windows-latest`):
 
 - **Every push and pull request to `master`** (and manual runs from the Actions tab): run the test suite with the pinned SDK. A failing test fails the run. Nothing is packaged.
-- **A version tag** runs the tests, then builds the portable package (with the MAUI workload), checks its contents (the AI runtime and FFmpeg with their licenses, no `.gguf` models), and publishes a GitHub Release with `AssetManager-<version>-win-x64-portable.zip`. Nothing is released if a test or the package check fails:
+- **A version tag** runs the tests, then builds the portable package (with the MAUI workload), checks its contents (the app's `LICENSE.txt`, the AI runtime and FFmpeg with their licenses, no `.gguf` models) and that `AssetManager.exe` reports the tag's version, and publishes a GitHub Release with `AssetManager-<version>-win-x64-portable.zip`. Nothing is released if a test or the package check fails:
 
   ```powershell
   git tag v1.2.0
@@ -78,10 +99,12 @@ To use an existing catalog from a portable copy (for example the one in `%LOCALA
 
   The tag must look like `v<major>.<minor>.<patch>`; the app then reports that version in Settings → About and in its log.
 
-The llama.cpp and FFmpeg downloads are cached between runs, keyed on the csproj files that pin them. The same publish runs locally:
+The version always comes from the git tags, through [MinVer](https://github.com/adamralph/minver) (a build-time package in [`Directory.Build.props`](Directory.Build.props)): a build of the commit tagged `v1.2.0` is `1.2.0`, and a build five commits later is `1.2.1-alpha.0.5`. Both CI jobs check out the full history with tags; a clone without them builds as `0.0.0-alpha.0`.
+
+The llama.cpp and FFmpeg downloads are cached between runs, keyed on the csproj files that pin them. The same publish runs locally, with the version of the checked-out commit:
 
 ```powershell
-dotnet publish AssetManager/AssetManager.csproj -c Release -f net10.0-windows10.0.19041.0 -p:Portable=true -p:Version=1.2.0 -p:ApplicationDisplayVersion=1.2.0 -o publish/AssetManager
+dotnet publish AssetManager/AssetManager.csproj -c Release -f net10.0-windows10.0.19041.0 -p:Portable=true -o publish/AssetManager
 ```
 
 ## AI models
@@ -97,6 +120,45 @@ Settings → AI model offers a one-click download of the recommended models from
 
 To use files you already have, pick them in Settings → AI model with "Pick file…". Any GGUF chat model that llama.cpp supports works; vision needs a matching `mmproj` file. Acceleration can be Auto (Vulkan GPU, else CPU), GPU or CPU.
 
+## Unity project export
+
+**Extract to folder** (in the selection bar) can write assets straight into a Unity project so they keep working:
+
+- **Unity project export** writes each file's original `.meta` next to it, so Unity keeps its GUID and import settings. Files from a `.unitypackage` or a Unity project folder have one; other files are written without. The option is on by default when the target folder is inside a Unity project, meaning a parent folder has both `Assets` and `ProjectSettings`. If a file has to be renamed because of a name conflict, its `.meta` gets the same new name.
+- **Include referenced files** also writes the files that the exported assets use from the same package or folder. References are followed across files: a prefab brings its meshes, materials and animator controllers, and each material brings its textures. Unity's built-in resources are left out. Before anything is written, the dialog lists these files, marked "dependency". Prefabs are cataloged (type Prefab, no preview), so they can be found and exported. Packages imported before this version pick up their prefabs on re-import.
+- **GUID already in project:** if the target project already has one of the exported GUIDs at another path, the dialog lists those files first. "Skip conflicting" leaves them out. "Continue" writes them anyway, and Unity then gives one of the two a new GUID, which can break references to it.
+
+## Keeping the catalog current
+
+The catalog does not watch your drives. Instead, **Sources → Check for changes** (or **Rescan** on one source) compares imported sources with their files and lists what changed. Nothing in the catalog changes until you act on a result:
+
+- **Folder sources** report added, changed (size or content) and removed files. Rescans follow the same ignored-folder and file-type rules as imports, so files an import skipped are not reported. "Import added files" opens the import review with the new files assigned to the existing source; they get its source tags. "Re-import changed assets" refreshes their metadata and previews. "Remove missing assets" deletes the assets whose files are gone, after a confirmation.
+- **Archive and package sources** report whether the file changed. "Update source" imports it again, and the import review offers it as a new version of the source (the same flow as importing a new version by hand).
+- **Sources on a detached drive** are listed as skipped, never as removed.
+
+**Library folders** (Settings → Library) are the folders where new packs appear, such as a downloads folder or a folder of purchased packs on an external drive. They are stored per drive, like sources, so they still work when the drive gets another letter. Checking for changes also lists every folder, archive and `.unitypackage` directly inside them that is not imported yet, and marks the ones that look like a new version of an imported pack (same name apart from version numbers, or mostly the same files). Pick the ones you want and import them in one go.
+
+**Check for changes at startup** (Settings → Library, off by default) runs both checks in the background about 30 seconds after the app starts. When it finds something, a notification opens the results; it never imports anything by itself.
+
+## Keyboard shortcuts
+
+In Browse, the asset grid works with the keyboard. `F` and the digits act on the selected assets, or on the focused one when nothing is selected. Shortcuts do not fire while you type in a text field. Press `?` in Browse to see this list in the app.
+
+| Keys | Action |
+|---|---|
+| `← → ↑ ↓` | Move between assets |
+| `Shift + arrows` | Extend the selection |
+| `Ctrl + A` | Select all results |
+| `Enter` | Open the details of the focused asset |
+| `Esc` | Close the details, or clear the selection |
+| `Space` | Play or stop a sound, or turn a 3D model's preview |
+| `/` | Focus the search box |
+| `F` | Toggle favourite |
+| `0 – 5` | Set the rating (0 clears it) |
+| `Delete` | Delete the selection from the catalog (asks first) |
+| `Menu key, Shift + F10` | Open the menu of the focused asset (also a right click) |
+| `?` | Show this list |
+
 ## Architecture
 
 The UI is Blazor with MudBlazor, hosted in a .NET MAUI `BlazorWebView` (WebView2). All logic is in plain .NET libraries, so the same UI also runs in a browser through the web dev host.
@@ -111,6 +173,8 @@ The UI is Blazor with MudBlazor, hosted in a .NET MAUI `BlazorWebView` (WebView2
 | `AssetManager.Processing` | Container readers (zip, 7z, rar, tar, gzip, `.unitypackage`), the virtual file system and extraction cache, location resolution, file classification and grouping, type handlers (image, model, audio, video, font, document), previews, the import staging pipeline, re-import, stored originals and export. |
 | `AssetManager.AI` | The `llama-server` host and model downloads, structured prompts (pack pass, item pass, orientation judgment, collection descriptions), embeddings, semantic search, and the AI queue. |
 | `AssetManager.Tests` | xUnit v3 and bUnit tests, with generated fixtures (zip, 7z, tar, Unity packages, FBX/OBJ scenes). |
+
+The logo masters are in `branding/`: `logo.svg` (the full group) and `logo-mark.svg` (the crate alone, used for favicons and the app bar). The app icon, splash, loading screen and favicon SVGs are copies of them, and `BrandingTests` fails when a copy drifts from its master.
 
 Main ideas (details in `design.md`):
 
@@ -145,3 +209,7 @@ It serves the same UI at `http://localhost:5022` and uses the same catalog and s
 | [Roboto](https://github.com/googlefonts/roboto-classic) font | — | SIL Open Font License 1.1 | Bundled under `AssetManager.Shared/wwwroot/lib/roboto`, so the UI needs no internet. |
 
 The AI models are not bundled. They are downloaded on request, and their licenses (the Gemma terms of use) apply to them.
+
+## License
+
+Asset Manager is released under the [MIT License](LICENSE). The portable package includes it as `LICENSE.txt` next to `AssetManager.exe`. Third-party components keep their own licenses; see [Bundled native binaries](#bundled-native-binaries).

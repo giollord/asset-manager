@@ -82,6 +82,8 @@ public class Asset
     public bool IsGameAsset { get; set; } = true;
 
     public ImageMetadata? Image { get; set; }
+    /// <summary>Frames and grid of a sprite sheet (design D3); null when the image is not a sheet.</summary>
+    public SpriteSheetMetadata? SpriteSheet { get; set; }
     public AudioMetadata? Audio { get; set; }
     public ModelMetadata? Model { get; set; }
     public FontMetadata? Font { get; set; }
@@ -93,6 +95,15 @@ public class Asset
     public bool OrientationUncertain { get; set; }
     public bool OrientationVerified { get; set; }
     public bool TexturesMissing { get; set; }
+
+    /// <summary>Flattened from sprite detection: the grid detector was not confident, so no grid was stored (review filter).</summary>
+    public bool GridUncertain { get; set; }
+
+    // User-owned (design D10): no AI, import or re-import code writes these.
+    public bool Favorite { get; set; }
+    /// <summary>0 = unrated, 1-5 stars.</summary>
+    public int Rating { get; set; }
+    public string? Notes { get; set; }
 
     public AiStatus AiStatus { get; set; }
     public AiInputMode AiInputMode { get; set; }
@@ -151,6 +162,8 @@ public class AssetFile
     public string? Material { get; set; }
     /// <summary>Companion textures: the renderer slot ("map", "normalMap", "emissiveMap"), when known.</summary>
     public string? Slot { get; set; }
+    /// <summary>Companion textures: how the file was attached (design D20).</summary>
+    public CompanionOrigin Origin { get; set; }
     public StoredFile? Stored { get; set; }
 }
 
@@ -169,6 +182,26 @@ public class AssetTag
     public long TagId { get; set; }
     public Tag Tag { get; set; } = null!;
     public TagOrigin Origin { get; set; }
+}
+
+/// <summary>
+/// A tag that belongs to a whole source (design D1). Each asset of the source carries it as an <see cref="AssetTag"/>
+/// with <see cref="TagOrigin.Source"/>, minus <see cref="AssetTagOptOut"/>s.
+/// </summary>
+public class SourceTag
+{
+    public long SourceId { get; set; }
+    public long TagId { get; set; }
+    public Tag Tag { get; set; } = null!;
+    /// <summary>Who added it: <see cref="TagOrigin.User"/> or <see cref="TagOrigin.AI"/> (consensus).</summary>
+    public TagOrigin Origin { get; set; }
+}
+
+/// <summary>The user removed a source tag from this one asset; <c>SourceTagService.ApplyAsync</c> never re-adds it.</summary>
+public class AssetTagOptOut
+{
+    public long AssetId { get; set; }
+    public long TagId { get; set; }
 }
 
 /// <summary>A collection is a tag rule; membership is computed by query, never stored.</summary>

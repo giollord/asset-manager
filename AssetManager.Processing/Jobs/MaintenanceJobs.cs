@@ -1,3 +1,4 @@
+using AssetManager.Core.Domain;
 using AssetManager.Core.Jobs;
 using AssetManager.Processing.Handlers;
 using AssetManager.Processing.Storage;
@@ -19,6 +20,10 @@ public static class JobTypes
     public const string Enrich = "ai.enrich";
     /// <summary>AI description of a collection (handled in AssetManager.AI); payload <see cref="CollectionPayload"/>.</summary>
     public const string DescribeCollection = "ai.describe-collection";
+    /// <summary>Re-detect sprite sheets and pixel art of images; payload <see cref="AssetsPayload"/> (null = all images).</summary>
+    public const string RedetectSprites = "assets.redetect-sprites";
+    /// <summary>Attach the texture suggestions of models and re-render them; payload <see cref="AssetsPayload"/>.</summary>
+    public const string ApplyTextureSuggestions = "assets.apply-texture-suggestions";
 }
 
 /// <summary>Payload of jobs over a set of assets; null ids means "all that apply" (e.g. all outdated previews).</summary>
@@ -46,6 +51,63 @@ public sealed class RegeneratePreviewsJob(PreviewService previews) : IJobHandler
         }), ct);
         foreach (var s in result.Skipped) context.Progress.Fail(s.AssetId.ToString(), s.Name, s.Reason);
         context.Progress.SetSummary(new { regenerated = result.Regenerated, skipped = result.Skipped.Count });
+    }
+}
+
+/// <summary>Bulk "Apply texture suggestions" (design D20): attaches each model's suggested textures, then re-renders those models.</summary>
+public sealed class ApplyTextureSuggestionsJob(ModelTextureService textures, PreviewService previews) : IJobHandler
+{
+    public string Type => JobTypes.ApplyTextureSuggestions;
+
+    public JobPool Pool => JobPool.Render;
+
+    public async Task RunAsync(JobContext context, CancellationToken ct)
+    {
+        var ids = context.Payload<AssetsPayload>().AssetIds ?? [];
+        var (models, attached) = await textures.AttachSuggestionsAsync(ids, ct);
+        context.Progress.SetStage("Re-rendering textured models", 0, 1, models.Count);
+        var done = 0;
+        var result = await previews.RegenerateAsync(models.ToArray(), new SyncProgress(n =>
+        {
+            context.Progress.Advance(n - done);
+            done = n;
+        }), ct);
+        foreach (var s in result.Skipped) context.Progress.Fail(s.AssetId.ToString(), s.Name, s.Reason);
+        context.Progress.SetSummary(new { models = models.Count, textures = attached, skipped = result.Skipped.Count });
+    }
+}
+
+/// <summary>
+/// "Re-detect sprite sheets and pixel art" (design: migration): runs the image handler again over image, texture and
+/// sprite sheet assets whose originals are available, so existing catalogs get the measured detection without a
+/// re-import. User edits of type, style and grid are kept; assets whose original is unavailable are reported as skipped.
+/// </summary>
+public sealed class RedetectSpritesJob(PreviewService previews, AssetManager.Data.CatalogStore catalog) : IJobHandler
+{
+    public string Type => JobTypes.RedetectSprites;
+
+    public JobPool Pool => JobPool.Render;
+
+    public async Task RunAsync(JobContext context, CancellationToken ct)
+    {
+        var ids = context.Payload<AssetsPayload>().AssetIds;
+        if (ids is null)
+        {
+            await using var db = catalog.CreateDbContext();
+            ids = await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.ToArrayAsync(
+                db.Assets.Where(a => a.Type == AssetType.Image || a.Type == AssetType.Texture || a.Type == AssetType.SpriteSheet)
+                    .OrderBy(a => a.Id).Select(a => a.Id), ct);
+        }
+        ids = ids.Where(id => context.Includes(id.ToString())).ToArray();
+        context.Progress.SetStage("Re-detecting sprite sheets and pixel art", 0, 1, ids.Length);
+        var done = 0;
+        var result = await previews.RegenerateAsync(ids, new SyncProgress(n =>
+        {
+            context.Progress.Advance(n - done, n < ids.Length ? $"Asset {ids[n]}" : null);
+            done = n;
+        }), ct);
+        foreach (var s in result.Skipped) context.Progress.Fail(s.AssetId.ToString(), s.Name, s.Reason);
+        context.Progress.SetSummary(new { checkedAssets = result.Regenerated, skipped = result.Skipped.Count });
     }
 }
 

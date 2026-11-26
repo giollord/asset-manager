@@ -36,4 +36,29 @@ public class DashboardTests : BunitContext
         Assert.Equal(new SearchQuery { AiStatus = AiStatus.Failed }, query);
         Assert.Equal(14, (await search.SearchAsync(query, 0, 100, Xunit.TestContext.Current.CancellationToken)).Total); // Browse lists those 14
     }
+
+    /// <summary>Spec "Dashboard tile": 3 sources with 410 assets have an unknown license.</summary>
+    [Fact]
+    public async Task License_audit_tile_opens_the_filtered_audit_list()
+    {
+        await using var c = await TestCatalog.CreateAsync();
+        foreach (var (name, n) in new[] { ("Old pack", 400), ("Freebies", 7), ("Misc", 3) })
+            await TestData.SourceAsync(c, n, s => { s.DisplayName = name; s.License = new LicenseInfo(); });
+        await TestData.SourceAsync(c, 5, s => { s.DisplayName = "Clean"; s.License = new LicenseInfo { Kind = "CC0", Commercial = TriState.Yes, Attribution = TriState.No }; });
+        Services.AddMudServices();
+        Services.AddSingleton(c.Store);
+        Services.AddSingleton<ICatalogStatsService>(new CatalogStatsService(c.Store, new AssetSearchService(c.Store)));
+        JSInterop.Mode = JSRuntimeMode.Loose;
+
+        var page = Render<Dashboard>();
+        var tile = page.WaitForElement(".audit-link[data-problem='UnknownLicense']");
+
+        Assert.Equal("Unknown license: 3 sources, 410 assets", tile.TextContent.Trim());
+        Assert.Equal("Non-commercial: 0 sources, 0 assets", page.Find(".audit-link[data-problem='NonCommercial']").TextContent.Trim());
+        tile.Click();
+
+        var uri = new Uri(Services.GetRequiredService<NavigationManager>().Uri);
+        Assert.Equal("/sources", uri.AbsolutePath);
+        Assert.Equal("?audit=UnknownLicense", uri.Query);
+    }
 }

@@ -116,6 +116,30 @@ public class AssetSearchTests
     }
 
     [Fact]
+    public async Task Favourites_rating_notes_and_grid_uncertain_filters()
+    {
+        await using var c = await TestCatalog.CreateAsync();
+        await TestData.SourceAsync(c, 5, make: i => i switch
+        {
+            0 => new Asset { Name = "fav5", Favorite = true, Rating = 5 },
+            1 => new Asset { Name = "fav4", Favorite = true, Rating = 4, Notes = "level 2 rocks" },
+            2 => new Asset { Name = "fav2", Favorite = true, Rating = 2 },
+            3 => new Asset { Name = "plain5", Rating = 5, Notes = "" },
+            _ => new Asset { Name = "sheet", Type = AssetType.Image, GridUncertain = true },
+        });
+        var search = new AssetSearchService(c.Store);
+
+        // Spec "Favourites with a minimum rating".
+        Assert.Equal(["fav4", "fav5"], (await NamesAsync(search, new SearchQuery { FavoritesOnly = true, MinRating = 4 })).Order());
+        Assert.Equal(["fav2", "fav4", "fav5"], (await NamesAsync(search, new SearchQuery { FavoritesOnly = true })).Order());
+        Assert.Equal(["fav4", "fav5", "plain5"], (await NamesAsync(search, new SearchQuery { MinRating = 4 })).Order());
+        Assert.Equal(["fav4"], await NamesAsync(search, new SearchQuery { HasNotes = true }));
+        Assert.Equal(["sheet"], await NamesAsync(search, new SearchQuery { GridUncertain = true }));
+        // Notes are full-text searchable.
+        Assert.Equal(["fav4"], await NamesAsync(search, new SearchQuery { Text = "rocks" }));
+    }
+
+    [Fact]
     public void Query_round_trips_through_a_url_token()
     {
         var q = new SearchQuery { Types = [AssetType.Audio], Text = "rain drops", IncludeTags = ["sfx"], Commercial = TriState.Yes, TexturesMissing = true, Sort = SearchSort.Name };
@@ -125,6 +149,12 @@ public class AssetSearchTests
         Assert.True(SearchQuery.FromToken("not a token!").IsEmpty);
         Assert.True(new SearchQuery().IsEmpty);
         Assert.False(q.IsEmpty);
+
+        var workflow = new SearchQuery { FavoritesOnly = true, MinRating = 3, HasNotes = true, GridUncertain = true, ImageQueryId = "q1" };
+        var workflowBack = SearchQuery.FromToken(workflow.ToToken());
+        Assert.Equal(workflow, workflowBack);
+        Assert.Equal(3, workflowBack.MinRating);
+        Assert.Equal("q1", workflowBack.ImageQueryId);
     }
 
     private static async Task<Dictionary<string, long>> NamesAndIdsAsync(TestCatalog c)

@@ -1,0 +1,33 @@
+@using AssetManager.Core.Platform
+@using AssetManager.Core.Updates
+@implements IDisposable
+@inject UpdateChecker Updates
+@inject IShellService Shell
+@inject ISnackbar Snackbar
+
+@* One notification per new version (spec "Update notification"), linking to its release page. Renders nothing. *@
+
+@code {
+    protected override void OnInitialized()
+    {
+        Updates.NewVersionFound += OnFound;
+        Show(); // a startup check that finished before the layout rendered
+    }
+
+    private void OnFound() => InvokeAsync(Show);
+
+    private void Show()
+    {
+        if (Updates.TakeNotice() is not { } update) return;
+        Snackbar.Add($"Asset Manager {update.Version} is available.", Severity.Info, options =>
+        {
+            options.Action = "Release page";
+            options.ActionColor = Color.Inherit;
+            options.RequireInteraction = false;
+            options.VisibleStateDuration = 15000;
+            options.OnClick = _ => Shell.OpenAsync(update.Url);
+        }, key: $"update-{update.Version}");
+    }
+
+    public void Dispose() => Updates.NewVersionFound -= OnFound;
+}

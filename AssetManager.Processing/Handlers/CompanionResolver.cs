@@ -19,8 +19,8 @@ public sealed record SourceFile(string RelativePath, string LocalPath, FileClass
     public string Extension => Path.GetExtension(FileName).ToLowerInvariant();
 }
 
-/// <summary>A file attached to a model, with the material slot it fills when known.</summary>
-public sealed record CompanionLink(SourceFile File, string? Material, string? Slot, string Reason);
+/// <summary>A file attached to a model, with the material slot it fills when known, and how it was found.</summary>
+public sealed record CompanionLink(SourceFile File, string? Material, string? Slot, string Reason, CompanionOrigin Origin = CompanionOrigin.Reference);
 
 /// <summary>One future asset: a primary file plus its companions.</summary>
 public sealed record AssetGroup(SourceFile Primary, IReadOnlyList<CompanionLink> Companions);
@@ -28,12 +28,13 @@ public sealed record AssetGroup(SourceFile Primary, IReadOnlyList<CompanionLink>
 /// <summary>
 /// Groups a source's files into assets before the handlers run (design D5). Textures are attached to models by,
 /// in order: Unity <c>.mat</c> GUID references (matched to the model's material names), the texture paths in the
-/// model's materials (Assimp), and file-name heuristics (same base name or a known suffix). A claimed texture
-/// becomes a companion and not its own asset; anything unclaimed stays a standalone asset.
+/// model's materials (Assimp), file-name heuristics (same base name or a known suffix), and, for each material still
+/// without a base colour, a stripped-name match anywhere in the source (design D20). A claimed texture becomes a
+/// companion and not its own asset; anything unclaimed stays a standalone asset.
 /// </summary>
 public sealed class CompanionResolver(ILogger<CompanionResolver>? logger = null)
 {
-    private static readonly (string Suffix, string? Slot)[] Suffixes =
+    internal static readonly (string Suffix, string? Slot)[] Suffixes =
     [
         ("albedo", "map"), ("diffuse", "map"), ("basecolor", "map"), ("base_color", "map"), ("basemap", "map"), ("color", "map"),
         ("col", "map"), ("diff", "map"), ("d", "map"), ("maintex", "map"), ("tex", "map"), ("texture", "map"),
@@ -69,15 +70,15 @@ public sealed class CompanionResolver(ILogger<CompanionResolver>? logger = null)
         {
             ct.ThrowIfCancellationRequested();
             var links = new List<CompanionLink>();
-            void Claim(SourceFile f, string? material, string? slot, string reason)
+            void Claim(SourceFile f, string? material, string? slot, string reason, CompanionOrigin origin = CompanionOrigin.Reference)
             {
                 if (links.Any(l => ReferenceEquals(l.File, f) && l.Material == material && l.Slot == slot)) return;
                 if (slot is not null && links.Any(l => l.Material == material && l.Slot == slot)) slot = null; // slot already filled
-                links.Add(new CompanionLink(f, material, slot, reason));
+                links.Add(new CompanionLink(f, material, slot, reason, origin));
                 claimed.Add(f);
             }
 
-            var materials = ReadMaterials(model);
+            var (materials, embedded) = ReadMaterials(model);
 
             // 1. Unity .mat files named like the model's materials.
             foreach (var (matName, _) in materials)
@@ -112,6 +113,21 @@ public sealed class CompanionResolver(ILogger<CompanionResolver>? logger = null)
                 if (model.Extension == ".obj" && string.Equals(mtl.Stem, model.Stem, StringComparison.OrdinalIgnoreCase) && mtl.Folder == model.Folder)
                     Claim(mtl, null, null, "obj material library");
 
+            // 4. Stripped-name match per material still without a base colour (design D20). A texture claimed by name
+            //    for no particular material (step 3) colours every material, so there is nothing left to match.
+            if (!embedded && !links.Any(l => l.Material is null && l.Slot is null or "map"))
+                foreach (var (matName, refs) in materials)
+                {
+                    if (links.Any(l => string.Equals(l.Material, matName, StringComparison.OrdinalIgnoreCase) && l.Slot == "map")) continue;
+                    var keys = new List<string> { matName };
+                    keys.AddRange(refs.Where(r => r.Slot == "map").Select(r => r.File));
+                    if (materials.Count == 1) keys.Add(model.Stem);
+                    if (TextureNames.UniqueMatch(textures, keys) is not { } match) continue;
+                    Claim(match, matName, "map", "stripped name", CompanionOrigin.NameMatch);
+                    foreach (var (extra, slot) in TextureNames.CompanionMaps(textures, match))
+                        Claim(extra, matName, slot, "stripped name", CompanionOrigin.NameMatch);
+                }
+
             groups.Add(new AssetGroup(model, links));
         }
 
@@ -121,13 +137,15 @@ public sealed class CompanionResolver(ILogger<CompanionResolver>? logger = null)
         return groups;
     }
 
-    /// <summary>Material names and their texture file references (by renderer slot).</summary>
-    private List<(string Name, List<(string Slot, string File)> Refs)> ReadMaterials(SourceFile model)
+    /// <summary>Material names and their texture file references (by renderer slot); whether the file embeds textures.</summary>
+    private (List<(string Name, List<(string Slot, string File)> Refs)> Materials, bool Embedded) ReadMaterials(SourceFile model)
     {
         try
         {
             using var loaded = ModelAnalyzer.Load(model.LocalPath);
-            return loaded.Scene.Materials.Select(m =>
+            var embedded = loaded.Scene.TextureCount > 0
+                           || loaded.Scene.Materials.Any(m => m.GetAllMaterialTextures().Any(t => t.FilePath?.StartsWith('*') == true));
+            return (loaded.Scene.Materials.Select(m =>
             {
                 var refs = new List<(string, string)>();
                 foreach (var (type, slot) in new[] { (Assimp.TextureType.BaseColor, "map"), (Assimp.TextureType.Diffuse, "map"),
@@ -138,12 +156,12 @@ public sealed class CompanionResolver(ILogger<CompanionResolver>? logger = null)
                         if (!string.IsNullOrWhiteSpace(slotInfo.FilePath) && !slotInfo.FilePath.StartsWith('*'))
                             refs.Add((slot == "other" ? null! : slot, Path.GetFileName(slotInfo.FilePath.Replace('\\', '/'))));
                 return (m.Name ?? "", refs);
-            }).ToList();
+            }).ToList(), embedded);
         }
         catch (Exception e) when (e is InvalidDataException or IOException or Assimp.AssimpException)
         {
             _log.LogDebug("Cannot read materials of {Model}: {Error}", model.RelativePath, e.Message);
-            return [];
+            return ([], false);
         }
     }
 

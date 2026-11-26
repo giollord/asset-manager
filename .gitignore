@@ -16,3 +16,6 @@ AssetManager.AI/native/llama/
 
 # Test run output
 TestResults/
+
+# Local portable publish output: the README and CI publish with -o publish/AssetManager
+publish/

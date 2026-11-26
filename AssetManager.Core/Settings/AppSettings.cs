@@ -7,6 +7,9 @@ public enum ThemeMode { System, Light, Dark }
 
 public enum AiAcceleration { Auto, Gpu, Cpu }
 
+/// <summary>When an automatic catalog backup is made at startup (spec "Backup schedule and retention").</summary>
+public enum BackupSchedule { Off, Daily, Weekly }
+
 /// <summary>
 /// App-level settings that cannot live inside the catalog (the catalog path itself, theme, model paths).
 /// Persisted as JSON in the app data folder (<see cref="AppPaths.SettingsFile"/>).
@@ -36,6 +39,59 @@ public sealed class AppSettings
 
     /// <summary>How many container levels (archive → package → …) are opened when importing.</summary>
     public int MaxNestingDepth { get; set; } = 5;
+
+    /// <summary>Run the AI tag consensus step (source tags from tags most assets share) after the item pass (design D2).</summary>
+    public bool ConsensusEnabled { get; set; } = true;
+
+    /// <summary>Share of a source's game assets (0-1) a tag or style needs to be a consensus candidate.</summary>
+    public double ConsensusShare { get; set; } = 0.6;
+
+    /// <summary>Sources with fewer game assets get no consensus step.</summary>
+    public int ConsensusMinAssets { get; set; } = 5;
+
+    /// <summary>Let the AI choose textures for model materials that have none (design D20).</summary>
+    public bool TextureMatchEnabled { get; set; } = true;
+
+    /// <summary>AI texture choices at or above this confidence are attached and the previews re-rendered.</summary>
+    public double TextureMatchThreshold { get; set; } = 0.7;
+
+    /// <summary>AI texture choices at or above this confidence (and below the match threshold) are offered as suggestions.</summary>
+    public double TextureSuggestThreshold { get; set; } = 0.4;
+
+    /// <summary>
+    /// Folders where new packs appear (design D11), as catalog locations (<c>Location.ToString()</c>: a volume id and a
+    /// path on it), so a drive that gets another letter still matches.
+    /// </summary>
+    public List<string> LibraryFolders { get; set; } = [];
+
+    /// <summary>Rescan the sources and scan the library folders 30 s after startup; findings are only reported.</summary>
+    public bool CheckForChangesAtStartup { get; set; }
+
+    /// <summary>Where catalog backups go; null means <c>backups</c> in the data folder (design D12).</summary>
+    public string? BackupFolder { get; set; }
+
+    /// <summary>At startup, back up the catalog when the last backup is older than a day or a week.</summary>
+    public BackupSchedule BackupSchedule { get; set; } = BackupSchedule.Daily;
+
+    /// <summary>How many automatic backups are kept; manual ones are never deleted automatically.</summary>
+    public int BackupKeep { get; set; } = 5;
+
+    /// <summary>Ask GitHub Releases for a newer version at most once a day (design D13). Off by default.</summary>
+    public bool UpdateCheckEnabled { get; set; }
+
+    /// <summary>When the update check last ran (UTC), successful or not.</summary>
+    public DateTime? LastUpdateCheck { get; set; }
+
+    /// <summary>Whether the last update check failed (shown as a note in About, never as an error).</summary>
+    public bool LastCheckFailed { get; set; }
+
+    /// <summary>The latest release the last successful check found, and its page.</summary>
+    public string? LatestVersion { get; set; }
+
+    public string? LatestReleaseUrl { get; set; }
+
+    /// <summary>The newest version a notification was shown for, so each new version is announced once.</summary>
+    public string? LastSeenVersion { get; set; }
 }
 
 /// <summary>
@@ -54,6 +110,8 @@ public static class AppPaths
     /// <summary>Files staged for the clipboard or other short-lived exports.</summary>
     public static string Export => Path.Combine(Temp, "export");
     public static string Logs => Path.Combine(Root, "logs");
+    /// <summary>The default catalog backup folder.</summary>
+    public static string Backups => Path.Combine(Root, "backups");
     /// <summary>The embedded browser's (WebView2) profile.</summary>
     public static string WebView => Path.Combine(Root, "webview");
     public static string SettingsFile => Path.Combine(Root, "settings.json");
@@ -157,6 +215,7 @@ public sealed class JsonAppSettingsStore : IAppSettingsStore
         if (s.ChatModelPath is { } chat) s.ChatModelPath = map(chat);
         if (s.MmprojPath is { } mmproj) s.MmprojPath = map(mmproj);
         if (s.EmbeddingModelPath is { } embedding) s.EmbeddingModelPath = map(embedding);
+        if (s.BackupFolder is { } backups) s.BackupFolder = map(backups);
     }
 
     private static void TrySave(string path, AppSettings settings)

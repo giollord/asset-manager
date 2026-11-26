@@ -19,6 +19,12 @@ public sealed partial class SchemaAwareChatClient : IChatClient
     /// <summary>Extra text every item description gets (to check corrections).</summary>
     public string? Flavor { get; set; }
 
+    /// <summary>Items (by name) the fake calls a sprite sheet, with its sprite_sheet answer.</summary>
+    public Dictionary<string, object> SpriteSheets { get; } = [];
+
+    /// <summary>Which consensus candidates the fake accepts as source tags (default: all).</summary>
+    public Func<string, bool> AcceptConsensus { get; set; } = _ => true;
+
     private int _running;
 
     /// <summary>The most requests that were in flight at the same time.</summary>
@@ -54,7 +60,8 @@ public sealed partial class SchemaAwareChatClient : IChatClient
                 {
                     index = i.Index,
                     description = $"Described {i.Name}.{(Flavor is null ? "" : " " + Flavor)}",
-                    type = TypeAfter(prompt, i.Index),
+                    type = SpriteSheets.ContainsKey(i.Name) ? "sprite_sheet" : TypeAfter(prompt, i.Index),
+                    sprite_sheet = SpriteSheets.GetValueOrDefault(i.Name),
                     tags = new[] { "ai-tag", i.Name.ToLowerInvariant() },
                     colors = new[] { "green" },
                     style = new[] { "stylized" },
@@ -64,6 +71,12 @@ public sealed partial class SchemaAwareChatClient : IChatClient
         }
         else if (schema.Contains("\"script_notes\""))
             answer = """{"description":"A pack of test assets.","license":{"kind":"CC0","commercial":"yes","attribution":"no","attribution_text":null,"evidence":"LICENSE.txt"},"links":[],"script_notes":"Game logic scripts.","style":["low poly"],"tags":["pack-tag"]}""";
+        else if (schema.Contains("\"apply_to_source\""))
+            answer = JsonSerializer.Serialize(new
+            {
+                decisions = CandidateLine().Matches(prompt).Select(m => m.Groups[1].Value).Distinct()
+                    .Select(c => new { tag = c, apply_to_source = AcceptConsensus(c), reason = "fake" }),
+            });
         else if (schema.Contains("\"yaw_fix\""))
             answer = """{"observations":["a","b","c","d","e","f"],"choice":1,"yaw_fix":0,"confidence":0.9}""";
         else
@@ -90,6 +103,9 @@ public sealed partial class SchemaAwareChatClient : IChatClient
     public object? GetService(Type serviceType, object? serviceKey = null) => null;
 
     public void Dispose() { }
+
+    [GeneratedRegex("Candidate \"([^\"]+)\"")]
+    private static partial Regex CandidateLine();
 
     [GeneratedRegex(@"Item (\d+)")]
     private static partial Regex ItemLabel();

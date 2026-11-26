@@ -7,8 +7,62 @@ public sealed record ImageMetadata
     public bool HasAlpha { get; init; }
     public string Format { get; init; } = "";
     public bool IsPixelArt { get; init; }
+    /// <summary>Nearest-neighbour upscale factor of pixel art (1 = native), from <c>PixelArtAnalyzer</c>.</summary>
+    public int? PixelScale { get; init; }
     public int? ColorCount { get; init; }
     public int? Frames { get; init; }
+}
+
+/// <summary>One frame of a sprite sheet, in original pixels (top-left origin).</summary>
+public sealed record SpriteFrame(string? Name, int X, int Y, int W, int H);
+
+/// <summary>A regular sprite grid, in original pixels.</summary>
+public sealed record SpriteGrid
+{
+    public int CellW { get; init; }
+    public int CellH { get; init; }
+    public int OffsetX { get; init; }
+    public int OffsetY { get; init; }
+    public int SpacingX { get; init; }
+    public int SpacingY { get; init; }
+    public int Columns { get; init; }
+    public int Rows { get; init; }
+
+    /// <summary>Rectangle of the cell at <paramref name="col"/>, <paramref name="row"/>.</summary>
+    public SpriteFrame Cell(int col, int row, string? name = null) =>
+        new(name, OffsetX + col * (CellW + SpacingX), OffsetY + row * (CellH + SpacingY), CellW, CellH);
+
+    /// <summary>The same cell size, offset and spacing with as many columns and rows as fit an image of this size.</summary>
+    public SpriteGrid FitTo(int width, int height) => this with
+    {
+        Columns = CellW <= 0 ? 0 : Math.Max(0, (width - OffsetX + SpacingX) / (CellW + SpacingX)),
+        Rows = CellH <= 0 ? 0 : Math.Max(0, (height - OffsetY + SpacingY) / (CellH + SpacingY)),
+    };
+
+    /// <summary>Whether every cell lies inside an image of this size.</summary>
+    public bool FitsIn(int width, int height) =>
+        CellW > 0 && CellH > 0 && Columns > 0 && Rows > 0 && OffsetX >= 0 && OffsetY >= 0 && SpacingX >= 0 && SpacingY >= 0 &&
+        OffsetX + Columns * CellW + (Columns - 1) * SpacingX <= width && OffsetY + Rows * CellH + (Rows - 1) * SpacingY <= height;
+}
+
+/// <summary>Sprite sheet frames (design D3): slicing data gives irregular frames, a grid gives regular ones.</summary>
+public sealed record SpriteSheetMetadata
+{
+    /// <summary>The non-empty frames, in reading order.</summary>
+    public List<SpriteFrame> Frames { get; init; } = [];
+    /// <summary>The grid form, when the frames lie on a regular grid.</summary>
+    public SpriteGrid? Grid { get; init; }
+    public int FrameCount { get; init; }
+    public double Confidence { get; init; }
+    public GridDetectedBy DetectedBy { get; init; }
+
+    /// <summary>The first <paramref name="frameCount"/> cells of the grid in reading order (all cells when null).</summary>
+    public static SpriteSheetMetadata FromGrid(SpriteGrid grid, int? frameCount, GridDetectedBy by, double confidence = 1)
+    {
+        var count = Math.Clamp(frameCount ?? grid.Columns * grid.Rows, 0, grid.Columns * grid.Rows);
+        var frames = Enumerable.Range(0, count).Select(i => grid.Cell(i % grid.Columns, i / grid.Columns)).ToList();
+        return new SpriteSheetMetadata { Frames = frames, Grid = grid, FrameCount = count, Confidence = confidence, DetectedBy = by };
+    }
 }
 
 public sealed record AudioMetadata
@@ -63,7 +117,15 @@ public sealed record ModelMetadata
     /// <summary>Orientation probe candidates (labels 1–6) by geometric plausibility, most plausible first; a hint for the AI.</summary>
     public List<int> ProbeRanking { get; init; } = [];
     public string? RenderError { get; init; }
+    /// <summary>Texture choices of the AI below the match threshold, offered in the details drawer (design D20).</summary>
+    public List<TextureSuggestion> TextureSuggestions { get; init; } = [];
 }
+
+/// <summary>
+/// A texture the AI suggests for one material of a model. <see cref="FileId"/> is the catalog file (a texture asset's
+/// primary file or another model's companion) the suggestion points at.
+/// </summary>
+public sealed record TextureSuggestion(string Material, long FileId, string RelativePath, double Confidence, string Reason);
 
 /// <summary>Scale analysis of a model (design D6).</summary>
 public sealed record ModelTransformInfo

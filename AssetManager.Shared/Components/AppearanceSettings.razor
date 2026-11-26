@@ -1,0 +1,22 @@
+@inject IAppSettingsStore Settings
+
+@* Theme (spec "Dark and light theme"): MainLayout applies the choice at once; it persists in the app settings. *@
+<MudPaper Class="pa-4" Outlined="true" id="appearance-settings">
+    <MudText Typo="Typo.h6" Class="mb-2">@Title</MudText>
+    <MudText Typo="Typo.subtitle2" Class="mb-1">Theme</MudText>
+    <MudToggleGroup T="ThemeMode" Value="Settings.Current.Theme" ValueChanged="SetTheme" SelectionMode="SelectionMode.SingleSelection"
+                    Color="Color.Primary" Size="Size.Small" Style="max-width: 420px" id="appearance-theme">
+        <MudToggleItem Value="ThemeMode.System" Text="System" Class="theme-system" />
+        <MudToggleItem Value="ThemeMode.Light" Text="Light" Class="theme-light" />
+        <MudToggleItem Value="ThemeMode.Dark" Text="Dark" Class="theme-dark" />
+    </MudToggleGroup>
+</MudPaper>
+
+@code {
+    public const string Title = "Appearance";
+
+    /// <summary>The section's title and setting names, for the Settings search (design D8).</summary>
+    public static readonly string[] SearchTerms = [Title, "Theme", "System", "Light", "Dark"];
+
+    private void SetTheme(ThemeMode mode) => Settings.Update(s => s.Theme = mode);
+}

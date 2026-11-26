@@ -2,12 +2,15 @@ using System.Reflection;
 
 namespace AssetManager.Core.Settings;
 
-/// <summary>The app's version: set at publish (<c>-p:Version=1.2.0</c>, from the release tag), else the project default.</summary>
+/// <summary>
+/// The app's version, from the git tags at build time (MinVer, design D9): <c>1.2.0</c> for a build of the tag
+/// <c>v1.2.0</c>, <c>1.2.1-alpha.0.5</c> five commits later.
+/// </summary>
 public static class AppVersion
 {
     public static string Current { get; } = Read(Assembly.GetEntryAssembly() ?? typeof(AppVersion).Assembly);
 
-    /// <summary>The informational version without the "+commit" suffix the SDK appends.</summary>
+    /// <summary>The informational version without the "+commit" build metadata.</summary>
     public static string Read(Assembly assembly)
     {
         var info = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;

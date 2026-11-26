@@ -8,7 +8,7 @@
 
 @* Import defaults, the extraction cache and file classification (spec "Settings"). *@
 <MudPaper Class="pa-4" Outlined="true" id="import-settings">
-    <MudText Typo="Typo.h6" Class="mb-2">Import</MudText>
+    <MudText Typo="Typo.h6" Class="mb-2">@Title</MudText>
     <MudGrid Spacing="2">
         <MudItem xs="12" md="6">
             <MudSelect T="AiDepth" Value="Settings.Current.DefaultAiDepth" ValueChanged="v => Settings.Update(s => s.DefaultAiDepth = v)" Label="Default AI depth"
@@ -53,6 +53,15 @@
 </MudPaper>
 
 @code {
+    public const string Title = "Import";
+
+    /// <summary>The section's title and setting names, for the Settings search (design D8).</summary>
+    public static readonly string[] SearchTerms =
+    [
+        Title, "Default AI depth", "Maximum nesting depth", "Extraction cache limit (GB)", "Remove cached files unused for (days)",
+        "File classification", "Script and project extensions", "Ignored extensions", "Ignored folders (one per line)",
+    ];
+
     private ClassificationOptions _saved = new();
     private string _scripts = "", _ignored = "", _folders = "";
     private string? _error;

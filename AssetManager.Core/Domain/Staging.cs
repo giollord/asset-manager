@@ -35,6 +35,10 @@ public class ImportSession
     public List<string> IgnoredFolders { get; set; } = [];
     /// <summary>Whether the catalog's default ignored folders apply to this import.</summary>
     public bool UseDefaultIgnores { get; set; } = true;
+    /// <summary>Import into this existing source (spec "Acting on rescan results"): its staged root merges into it on confirm.</summary>
+    public long? IntoSourceId { get; set; }
+    /// <summary>When set, only these paths (relative to the single input folder) are staged: the files a rescan found added.</summary>
+    public List<string>? OnlyPaths { get; set; }
     public long? JobId { get; set; }
     /// <summary>Last staging stage that finished (0 none, 1 scan, 2 grouping, 3 metadata and previews, 4 pack pass, 5 item pass).</summary>
     public int StagedThrough { get; set; }

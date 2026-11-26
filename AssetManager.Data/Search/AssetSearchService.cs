@@ -8,7 +8,8 @@ namespace AssetManager.Data.Search;
 /// <summary>A result row: what a grid card needs.</summary>
 public sealed record AssetSummary(
     long Id, string Name, AssetType Type, long SourceId, string SourceName, AiStatus AiStatus, bool IsStored,
-    ScaleAnomaly ScaleAnomaly, bool OrientationUncertain, bool TexturesMissing, string? Description);
+    ScaleAnomaly ScaleAnomaly, bool OrientationUncertain, bool TexturesMissing, string? Description,
+    bool Favorite = false, int Rating = 0);
 
 public sealed record SearchPage(IReadOnlyList<AssetSummary> Items, int Total);
 
@@ -19,8 +20,8 @@ public sealed record SearchPage(IReadOnlyList<AssetSummary> Items, int Total);
 /// </summary>
 public sealed class AssetSearchService(CatalogStore catalog, IVolumeService? volumes = null)
 {
-    /// <summary>bm25 column weights: name, files, paths, description, tags, source.</summary>
-    private const string Bm25 = "bm25(asset_fts, 10.0, 4.0, 1.0, 2.0, 5.0, 1.0)";
+    /// <summary>bm25 column weights: name, files, paths, description, tags, source, notes.</summary>
+    private const string Bm25 = "bm25(asset_fts, 10.0, 4.0, 1.0, 2.0, 5.0, 1.0, 3.0)";
 
     private sealed class FtsHit
     {
@@ -93,7 +94,7 @@ public sealed class AssetSearchService(CatalogStore catalog, IVolumeService? vol
 
     public static IQueryable<AssetSummary> Project(IQueryable<Asset> q) => q.Select(a => new AssetSummary(
         a.Id, a.Name, a.Type, a.SourceId, a.Source.DisplayName, a.AiStatus, a.IsStored, a.ScaleAnomaly, a.OrientationUncertain,
-        a.TexturesMissing, a.Description));
+        a.TexturesMissing, a.Description, a.Favorite, a.Rating));
 
     /// <summary>Applies every filter except the text (which needs the FTS join) to <paramref name="q"/>.</summary>
     public async Task<IQueryable<Asset>> ApplyAsync(CatalogDbContext db, IQueryable<Asset> q, SearchQuery query, CancellationToken ct = default)
@@ -116,6 +117,7 @@ public sealed class AssetSearchService(CatalogStore catalog, IVolumeService? vol
         }
         if (query.Commercial is { } commercial) q = q.WhereCommercial(commercial);
         if (query.Attribution is { } attribution) q = q.WhereAttribution(attribution);
+        if (query.LicenseProblem is { } problem) q = q.WhereLicenseProblem(problem);
         if (query.Availability is { } availability)
         {
             // Availability is per volume (is the drive mounted?); a stored copy always counts as available.
@@ -131,7 +133,23 @@ public sealed class AssetSearchService(CatalogStore catalog, IVolumeService? vol
         if (query.OrientationUncertain) q = q.Where(a => a.OrientationUncertain);
         if (query.OrientationNotVerified) q = q.Where(a => a.Type == AssetType.Model3D && !a.OrientationVerified);
         if (query.TexturesMissing) q = q.Where(a => a.TexturesMissing);
+        if (query.TexturesMatchedByAi) q = q.Where(a => a.Files.Any(f => f.Origin == CompanionOrigin.Ai));
+        if (query.TextureSuggestions)
+        {
+            // Model metadata is a JSON column: ask SQLite's JSON functions.
+            var suggested = db.Database.SqlQueryRaw<long>(
+                "SELECT Id AS Value FROM Assets WHERE Model IS NOT NULL AND json_array_length(Model, '$.textureSuggestions') > 0");
+            q = q.Where(a => suggested.Contains(a.Id));
+        }
         if (query.AiStatus is { } status) q = q.Where(a => a.AiStatus == status);
+        if (query.FavoritesOnly) q = q.Where(a => a.Favorite);
+        if (query.MinRating > 0)
+        {
+            var min = query.MinRating;
+            q = q.Where(a => a.Rating >= min);
+        }
+        if (query.HasNotes) q = q.Where(a => a.Notes != null && a.Notes != "");
+        if (query.GridUncertain) q = q.Where(a => a.GridUncertain);
         return q;
     }
 

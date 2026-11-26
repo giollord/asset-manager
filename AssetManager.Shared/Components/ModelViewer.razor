@@ -6,7 +6,22 @@
 @inject IJSRuntime JS
 @inject PreviewService Previews
 
-@* Interactive three.js viewer of a model's original (orbit with the mouse); the orientation can be changed live. *@
+@* Interactive three.js viewer of a model's original (orbit with the mouse); the orientation can be changed live. When
+   the original is unavailable, the stored renders are shown as a turntable instead (spec "View model with the drive
+   detached", design D18). *@
+@if (_missing is not null && FallbackToRenders)
+{
+    <div class="model-viewer model-viewer-fallback" style="display: flex; flex-direction: column; gap: 4px; height: @(CssHeight ?? $"{Height}px")">
+        <MudText Typo="Typo.caption" Class="mud-text-secondary viewer-fallback-note" title="@($"Missing: {_missing}")">
+            Original not available — showing stored renders
+        </MudText>
+        <div style="flex: 1; min-height: 0">
+            <ModelTurntable AssetId="AssetId" Height="100%" Id="viewer-turntable" />
+        </div>
+    </div>
+}
+else
+{
 <div class="preview-surface model-viewer" style="position: relative; height: @(CssHeight ?? $"{Height}px"); border-radius: 4px">
     <div @ref="_canvas" style="width: 100%; height: 100%"></div>
     @if (_loading)
@@ -18,6 +33,7 @@
         <MudText Typo="Typo.body2" Class="mud-text-secondary pa-3 viewer-error" Style="position: absolute; inset: 0">@_error</MudText>
     }
 </div>
+}
 
 @code {
     [Parameter, EditorRequired] public long AssetId { get; set; }
@@ -27,6 +43,9 @@
     /// <summary>A CSS height instead of <see cref="Height"/>, e.g. "100%" to fill a dialog.</summary>
     [Parameter] public string? CssHeight { get; set; }
 
+    /// <summary>Show the stored renders when the original is unavailable (off while an unsaved rotation is shown).</summary>
+    [Parameter] public bool FallbackToRenders { get; set; } = true;
+
     /// <summary>The rotation shown (degrees about X, Y, Z); changes apply without reloading.</summary>
     [Parameter] public (int X, int Y, int Z) Rotation { get; set; }
 
@@ -34,6 +53,7 @@
     private IJSObjectReference? _module, _viewer;
     private bool _loading = true;
     private string? _error;
+    private string? _missing;
     private (int, int, int)? _shown;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -70,6 +90,7 @@
         }
         catch (OriginalUnavailableException e)
         {
+            _missing = e.Missing;
             _error = $"The original is not available ({e.Missing}). Connect the drive or store the asset in the catalog to view it in 3D.";
         }
         catch (Exception e) when (e is IOException or JSException or InvalidOperationException or ContainerReadException)

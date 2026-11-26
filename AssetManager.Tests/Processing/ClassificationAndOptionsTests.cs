@@ -23,6 +23,7 @@ public class ClassificationAndOptionsTests
     [InlineData("Fonts/pixel.ttf", AssetType.Font)]
     [InlineData("intro.mp4", AssetType.Video)]
     [InlineData("Materials/Wood.mat", AssetType.Material)]
+    [InlineData("Prefabs/Barrel.prefab", AssetType.Prefab)] // cataloged for Unity export with references (design D8)
     [InlineData("docs/manual.pdf", AssetType.Document)]
     [InlineData("data.bin", AssetType.Other)]
     public void Sample_extensions_map_to_types(string path, AssetType expected)
@@ -37,7 +38,6 @@ public class ClassificationAndOptionsTests
     [InlineData("Shaders/Toon.shader")]
     [InlineData("Plugins/x.dll")]
     [InlineData("Scenes/Demo.unity")]
-    [InlineData("Prefabs/Barrel.prefab")]
     [InlineData("Game.asmdef")]
     public void Code_and_project_files_are_noted(string path)
     {
@@ -80,8 +80,11 @@ public class ClassificationAndOptionsTests
         Assert.Equal(80, o.ImageQuality);
         Assert.Equal(512, o.KeepAsIsMaxDimension);
         Assert.Equal(64, o.KeepAsIsMaxKb);
-        Assert.Equal(128, o.PixelArtMaxEdge);
-        Assert.Equal(64, o.PixelArtMaxColors);
+        Assert.Equal(0.97, o.PixelArtGridShare);
+        Assert.Equal(64, o.PixelArtPaletteSize);
+        Assert.Equal(0.98, o.PixelArtPaletteShare);
+        Assert.Equal(1024, o.PixelArtNativeMaxEdge);
+        Assert.Equal(0.6, o.GridConfidenceThreshold);
         Assert.True(o.PixelArtDetection);
         Assert.Equal(384, o.RenderSize);
         Assert.Equal([-15, 20, 55], o.Elevations);

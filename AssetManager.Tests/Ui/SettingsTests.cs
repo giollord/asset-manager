@@ -75,6 +75,63 @@ public class SettingsTests : BunitContext
     }
 
     [Fact]
+    public async Task Suggested_tags_add_and_reset_without_touching_assets()
+    {
+        await using var c = await TestCatalog.CreateAsync();
+        var src = await TestData.SourceAsync(c, 2);
+        await TestData.TagAsync(c, src.Assets[0].Id, "low poly", "rock");
+        Services.AddMudServices();
+        Services.AddSingleton(c.Store);
+        Services.AddSingleton(new CatalogSettingsService(c.Store));
+        Services.AddSingleton<IAppSettingsStore>(new JsonAppSettingsStore(Path.Combine(c.Dir.Path, "settings.json")));
+        Services.AddScoped<UiActions>();
+        Services.AddLogging();
+        JSInterop.Mode = JSRuntimeMode.Loose;
+        var settings = new CatalogSettingsService(c.Store);
+
+        var form = Render<AiTaggingSettings>();
+        form.WaitForAssertion(() => Assert.Equal(SuggestedTags.Default.Count, form.FindAll(".suggested-tag").Count));
+        Assert.True(form.Find("#suggested-tags-reset").HasAttribute("disabled"));
+
+        var input = form.Find("#suggested-tag-input");
+        input.Input("Voxel");
+        input.KeyDown(new Microsoft.AspNetCore.Components.Web.KeyboardEventArgs { Key = "Enter" });
+        form.WaitForAssertion(() => Assert.NotEmpty(form.FindAll(".suggested-tag[data-tag=voxel]")));
+        Assert.Contains("voxel", await settings.GetSuggestedTagsAsync(Ct));
+
+        form.Find("#suggested-tags-reset").Click();
+        form.WaitForAssertion(() => Assert.Empty(form.FindAll(".suggested-tag[data-tag=voxel]")));
+        Assert.Equal(SuggestedTags.Default, await settings.GetSuggestedTagsAsync(Ct));
+
+        // Existing assets keep their tags.
+        await using var db = c.Db();
+        var tags = await db.AssetTags.Where(t => t.AssetId == src.Assets[0].Id).Select(t => t.Tag.Name).OrderBy(n => n).ToListAsync(Ct);
+        Assert.Equal(["low poly", "rock"], tags);
+    }
+
+    /// <summary>Settings → AI: texture matching switch and thresholds (design D20).</summary>
+    [Fact]
+    public async Task Texture_matching_settings_are_saved()
+    {
+        await using var c = await TestCatalog.CreateAsync();
+        var store = new JsonAppSettingsStore(Path.Combine(c.Dir.Path, "settings.json"));
+        Services.AddMudServices();
+        Services.AddSingleton(c.Store);
+        Services.AddSingleton(new CatalogSettingsService(c.Store));
+        Services.AddSingleton<IAppSettingsStore>(store);
+        Services.AddScoped<UiActions>();
+        Services.AddLogging();
+        JSInterop.Mode = JSRuntimeMode.Loose;
+
+        var form = Render<AiTaggingSettings>();
+        form.Find("#texture-match-threshold input, input#texture-match-threshold").Change("85");
+        form.WaitForAssertion(() => Assert.Equal(0.85, store.Current.TextureMatchThreshold, 3));
+        form.Find("#texture-match-enabled input, input#texture-match-enabled").Change(false);
+        form.WaitForAssertion(() => Assert.False(store.Current.TextureMatchEnabled));
+        form.WaitForAssertion(() => Assert.True(form.Find("#texture-suggest-threshold input, input#texture-suggest-threshold").HasAttribute("disabled")));
+    }
+
+    [Fact]
     public async Task Preview_form_shows_every_option_validates_and_resets()
     {
         await using var c = await TestCatalog.CreateAsync();

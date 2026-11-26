@@ -12,7 +12,7 @@ public sealed record ClassificationOptions : IValidatableObject
         ".cs", ".js", ".ts", ".jsx", ".tsx", ".py", ".lua", ".gd", ".rb", ".java", ".cpp", ".c", ".h", ".hpp",
         ".shader", ".hlsl", ".cginc", ".glsl", ".compute", ".shadergraph", ".shadersubgraph", ".usf", ".ush",
         ".asmdef", ".asmref", ".dll", ".so", ".dylib", ".pdb", ".lib", ".a", ".exe", ".jar",
-        ".prefab", ".unity", ".asset", ".controller", ".overridecontroller", ".anim", ".mask", ".mixer", ".playable",
+        ".unity", ".asset", ".controller", ".overridecontroller", ".anim", ".mask", ".mixer", ".playable",
         ".preset", ".lighting", ".physicmaterial", ".physicsmaterial2d", ".rendertexture", ".spriteatlas", ".guiskin",
         ".fontsettings", ".flare", ".terrainlayer", ".signal", ".brush", ".giparams", ".inputactions", ".uss", ".uxml", ".tss",
         ".tscn", ".tres", ".godot", ".import", ".uasset", ".umap", ".uproject", ".uplugin",

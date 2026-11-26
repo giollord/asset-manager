@@ -1,0 +1,55 @@
+@using AssetManager.Data.Services
+@using Microsoft.Extensions.DependencyInjection
+@inject IServiceProvider Services
+@inject UiActions Ui
+
+@* Credits report (spec "Credits report", design D9): Markdown, plain text or CSV for a selection, a collection or the
+   current results, saved into a folder the user picks. Built from the catalog only, so drives may be detached. *@
+<MudMenu Icon="@(Label is null ? Icons.Material.Outlined.Receipt : null)" Label="@Label" StartIcon="@(Label is null ? null : Icons.Material.Outlined.Receipt)"
+         Size="Size.Small" Dense="true" Variant="@(Label is null ? Variant.Text : Variant.Outlined)" Disabled="_busy || Disabled" Class="@Class" id="@Id"
+         title="Credits report: license, attribution and links per source">
+    <MudMenuItem OnClick="() => SaveAsync(CreditsFormat.Markdown)" Class="credits-markdown">Credits as Markdown</MudMenuItem>
+    <MudMenuItem OnClick="() => SaveAsync(CreditsFormat.Text)" Class="credits-text">Credits as plain text</MudMenuItem>
+    <MudMenuItem OnClick="() => SaveAsync(CreditsFormat.Csv)" Class="credits-csv">Credits as CSV (one row per asset)</MudMenuItem>
+</MudMenu>
+
+@code {
+    /// <summary>The assets to credit (asked when the user picks a format).</summary>
+    [Parameter, EditorRequired] public Func<Task<IReadOnlyCollection<long>>> Ids { get; set; } = null!;
+
+    /// <summary>Report title, also used in the file name (e.g. the collection name).</summary>
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+
+    /// <summary>A text button instead of an icon.</summary>
+    [Parameter] public string? Label { get; set; }
+
+    [Parameter] public string? Id { get; set; }
+
+    [Parameter] public string? Class { get; set; }
+
+    [Parameter] public bool Disabled { get; set; }
+
+    private bool _busy;
+
+    private async Task SaveAsync(CreditsFormat format)
+    {
+        _busy = true;
+        try
+        {
+            var folder = await Services.GetRequiredService<AssetManager.Core.Platform.IFolderPicker>().PickFolderAsync();
+            if (folder is null) return;
+            string path = "";
+            if (await Ui.RunAsync(async () =>
+                {
+                    var ids = await Ids();
+                    if (ids.Count == 0) throw new InvalidOperationException("There are no assets to credit.");
+                    path = await Services.GetRequiredService<CreditsService>().SaveAsync(Title, ids, format, folder);
+                }))
+                await Ui.RunAsync(() => Services.GetRequiredService<AssetManager.Core.Platform.IShellService>().RevealAsync(path), $"Credits saved: {Path.GetFileName(path)}");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

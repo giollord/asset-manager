@@ -25,9 +25,12 @@ public static class DataServiceCollectionExtensions
         services.TryAddSingleton<Search.CatalogStatsService>();
         services.TryAddSingleton<Search.ICatalogStatsService>(sp => sp.GetRequiredService<Search.CatalogStatsService>());
         services.TryAddSingleton<Services.CollectionService>();
+        services.TryAddSingleton<Services.CreditsService>();
         services.TryAddSingleton<Services.MetadataEditService>();
         services.TryAddSingleton<Services.DeletionService>();
         services.TryAddSingleton<Services.SourceService>();
+        services.TryAddSingleton<Services.CatalogSettingsService>();
+        services.TryAddSingleton<Services.SourceTagService>();
         services.TryAddSingleton<Services.CatalogLocationService>(sp => new Services.CatalogLocationService(sp.GetRequiredService<CatalogStore>(), sp.GetRequiredService<IAppSettingsStore>(), sp.GetService<Core.Jobs.IProgressHub>()));
         services.AddSingleton<IStartupTask, OpenCatalogStartupTask>();
         services.AddSingleton<IStartupTask, VectorIndexStartupTask>();
@@ -37,6 +40,11 @@ public static class DataServiceCollectionExtensions
             sp.GetRequiredService<Jobs.ProgressHub>(), sp.GetService<Microsoft.Extensions.Logging.ILogger<Jobs.JobQueue>>()));
         services.TryAddSingleton<Core.Jobs.IJobQueue>(sp => sp.GetRequiredService<Jobs.JobQueue>());
         services.AddSingleton<IStartupTask, Jobs.JobQueueStartupTask>();
+        services.TryAddSingleton<Services.CatalogBackupService>(sp => new Services.CatalogBackupService(sp.GetRequiredService<CatalogStore>(),
+            sp.GetRequiredService<IAppSettingsStore>(), sp.GetService<Core.Jobs.IJobQueue>(), sp.GetService<Core.Jobs.IProgressHub>(),
+            sp.GetService<Microsoft.Extensions.Logging.ILogger<Services.CatalogBackupService>>()));
+        services.AddSingleton<Core.Jobs.IJobHandler, Services.CatalogBackupJob>();
+        services.AddSingleton<IStartupTask, Services.BackupStartupTask>();
         return services;
     }
 }

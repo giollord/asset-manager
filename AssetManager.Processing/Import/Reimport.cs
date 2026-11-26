@@ -60,6 +60,7 @@ public sealed class ReimportJob(CatalogStore catalog, ILocationResolver resolver
         {
             foreach (var chunk in processed.Chunk(500))
                 await db.Assets.Where(a => chunk.Contains(a.Id)).ExecuteUpdateAsync(u => u.SetProperty(a => a.EmbeddingDirty, true), ct);
+            await AssetManager.Data.Services.SourceTagService.ApplyForAssetsAsync(db, processed, ct);
             if (payload.Reenrich && processed.Count > 0)
             {
                 foreach (var chunk in processed.Chunk(500))

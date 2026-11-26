@@ -85,8 +85,8 @@
                                         {
                                             <tr>
                                                 <td><MudIcon Icon="@(e.IsWarning ? Icons.Material.Filled.Warning : Icons.Material.Filled.Error)" Color="@(e.IsWarning ? Color.Warning : Color.Error)" Size="Size.Small" /></td>
-                                                <td>@(e.ItemName ?? e.ItemRef)</td>
-                                                <td>@e.Reason</td>
+                                                <td class="selectable">@(e.ItemName ?? e.ItemRef)</td>
+                                                <td class="selectable">@e.Reason</td>
                                             </tr>
                                         }
                                     </tbody>

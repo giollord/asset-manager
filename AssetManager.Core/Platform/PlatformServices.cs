@@ -56,6 +56,32 @@ public interface IVolumeService
 /// Files dropped onto the app window (design D9): the host forwards the real paths of a WebView2 drop here, and the
 /// import page takes them. Paths dropped while the import page is closed wait in <see cref="TakePending"/>.
 /// </summary>
+/// <summary>Dragging catalog files out of the app into Explorer or an engine (design D7); only the desktop host supports it.</summary>
+public interface IDragOutService
+{
+    bool IsSupported { get; }
+}
+
+/// <summary>
+/// Shared state of a drag-out (design D7): Browse publishes its selection (a drag of a selected card takes the whole
+/// selection); the host reports progress ("Preparing N files…") and problems, which the layout shows.
+/// </summary>
+public sealed class DragOutState
+{
+    /// <summary>The assets selected in Browse (live; read on the UI thread).</summary>
+    public IReadOnlyCollection<long> Selection { get; set; } = [];
+
+    /// <summary>Raised with a status text while files are prepared, and with null when done.</summary>
+    public event Action<string?>? StatusChanged;
+
+    /// <summary>Raised with a message for the user (e.g. unavailable assets).</summary>
+    public event Action<string>? Problem;
+
+    public void SetStatus(string? status) => StatusChanged?.Invoke(status);
+
+    public void Report(string message) => Problem?.Invoke(message);
+}
+
 public sealed class FileDropBroker
 {
     private readonly object _gate = new();
@@ -81,4 +107,42 @@ public sealed class FileDropBroker
             return result;
         }
     }
+}
+
+/// <summary>A rectangle in CSS pixels, relative to the top-left corner of the page.</summary>
+public readonly record struct ChromeRect(double X, double Y, double Width, double Height);
+
+/// <summary>
+/// The desktop window's frame (spec "window-chrome", design D2): whether the app bar is the window's title bar, how much
+/// room the system caption buttons take at its right end, and the colours of those buttons.
+/// </summary>
+public interface IWindowChrome
+{
+    /// <summary>True when the app bar is the window's title bar and the system draws its caption buttons over it.</summary>
+    bool IsCustomTitleBar { get; }
+
+    /// <summary>Width of the system caption buttons in CSS pixels; 0 without a custom title bar.</summary>
+    double CaptionButtonsWidth { get; }
+
+    /// <summary>Raised when <see cref="CaptionButtonsWidth"/> changes (display scale or window size).</summary>
+    event Action? Changed;
+
+    /// <summary>Colours of the caption buttons, as CSS hex colours (<c>#rrggbb</c> or <c>#rrggbbaa</c>).</summary>
+    void SetCaptionColors(string foreground, string hoverBackground);
+
+    /// <summary>
+    /// The interactive elements of the app bar. The rest of the title bar strip moves the window; these rectangles take
+    /// clicks like the rest of the page.
+    /// </summary>
+    void SetInteractiveRegions(IReadOnlyList<ChromeRect> regions);
+}
+
+/// <summary>A host without a window frame of its own (the web dev host in a browser tab): nothing to reserve or colour.</summary>
+public sealed class NoWindowChrome : IWindowChrome
+{
+    public bool IsCustomTitleBar => false;
+    public double CaptionButtonsWidth => 0;
+    public event Action? Changed { add { } remove { } }
+    public void SetCaptionColors(string foreground, string hoverBackground) { }
+    public void SetInteractiveRegions(IReadOnlyList<ChromeRect> regions) { }
 }
