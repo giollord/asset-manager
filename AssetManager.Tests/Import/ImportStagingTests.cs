@@ -76,6 +76,66 @@ public class ImportStagingTests
         Assert.Contains("\"assets\":3", job.SummaryJson);
     }
 
+    /// <summary>Records the container in effect at every advance, and the last value of each count.</summary>
+    private sealed class RecordingProgress : IJobProgress
+    {
+        public string? Container;
+        public List<(string? Item, string? Container)> Advances { get; } = [];
+        public List<string?> Containers { get; } = [];
+        public Dictionary<string, long> Counts { get; } = [];
+        public List<string> CountOrder { get; } = [];
+        public string? Stage;
+
+        public void SetStage(string name, int index, int count, long total = 0) => Stage = name;
+        public void SetTotal(long total) { }
+        public void Advance(long count = 1, string? currentItem = null) { if (Stage == "Scanning") Advances.Add((currentItem, Container)); }
+        public void SetCurrentItem(string? item) { }
+        public void Warn(string itemRef, string? itemName, string reason) { }
+        public void Fail(string itemRef, string? itemName, string reason) { }
+        public void SetSummary(object summary) { }
+        public void SetContainer(string? container) { Container = container; Containers.Add(container); }
+        public void SetCount(string label, long value) { if (Counts.TryAdd(label, value)) CountOrder.Add(label); else Counts[label] = value; }
+    }
+
+    [Fact]
+    public async Task Scan_reports_the_archive_and_what_it_found()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var kit = await ImportKit.CreateAsync();
+        var folder = await PackFolderAsync(kit.Catalog.Dir);
+        var session = await kit.Stager.CreateSessionAsync(new ImportRequest([folder], Depth: AiDepth.None), ct);
+
+        var progress = new RecordingProgress();
+        await kit.Stager.ScanAndGroupAsync(session.Id, progress, 6, ct);
+
+        // Spec "Current archive shown while working inside it": the zip's file carries the zip, plain files none.
+        Assert.Equal("Sounds.zip", progress.Advances.Single(a => a.Item == "Sfx/beep.wav").Container);
+        Assert.All(progress.Advances.Where(a => a.Item != "Sfx/beep.wav"), a => Assert.Null(a.Container));
+        Assert.Contains("broken.zip", progress.Containers); // named while it was being opened
+        Assert.Null(progress.Container);                   // cleared once the scan ended
+
+        // Spec "Import shows what it found so far": 7 files (the unreadable zip is not a file), 3 of a supported type,
+        // grouped into 3 assets.
+        Assert.Equal([ImportStager.FilesFoundCount, ImportStager.ImportableCount, ImportStager.AssetsCount], progress.CountOrder);
+        Assert.Equal((7L, 3L, 3L), (progress.Counts["files found"], progress.Counts["importable"], progress.Counts["assets"]));
+        await using (var db = kit.Catalog.Db())
+            Assert.Equal(3, await db.AllAssets.CountAsync(a => a.ImportSessionId == session.Id, ct));
+
+        // Resumed past grouping: the asset count comes back from the staged assets.
+        var resumed = new RecordingProgress();
+        await kit.Stager.ScanAndGroupAsync(session.Id, resumed, 6, ct);
+        Assert.Equal(3L, resumed.Counts["assets"]);
+        Assert.False(resumed.Counts.ContainsKey("files found"));
+    }
+
+    [Fact]
+    public void Container_label_uses_file_names_outermost_first()
+    {
+        Assert.Equal("Packs.zip → Forest.unitypackage",
+            ImportStager.ContainerLabel(new Location("1A2B", @"Downloads\Packs.zip", ["Unity/Forest.unitypackage"])));
+        Assert.Equal("Forest.zip", ImportStager.ContainerLabel(new Location(null, @"E:\Packs\Forest.zip")));
+    }
+
     [Fact]
     public async Task Nothing_committed_before_confirm()
     {

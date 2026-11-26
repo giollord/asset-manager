@@ -25,6 +25,18 @@ public interface IJobProgress
     /// <summary>Records a failed item (kept as a <see cref="JobItemError"/>; "Retry failed" re-runs exactly these).</summary>
     void Fail(string itemRef, string? itemName, string reason);
 
+    /// <summary>
+    /// The archive or package being read, shown next to the current item (e.g. <c>Packs.zip → Forest.unitypackage</c>);
+    /// null when working on plain files. Live only: not kept with the finished job.
+    /// </summary>
+    void SetContainer(string? container);
+
+    /// <summary>
+    /// Sets a labeled live count (e.g. "files found"), adding it after the existing ones the first time.
+    /// Live only: not kept with the finished job.
+    /// </summary>
+    void SetCount(string label, long value);
+
     /// <summary>Outcome counts kept with the finished job, e.g. <c>new { updated = 3, added = 1, removed = 0 }</c>.</summary>
     void SetSummary(object summary);
 }
@@ -67,6 +79,12 @@ public sealed record JobSnapshot(
     long Done, long Total, string? CurrentItem, int Warnings, int Errors, DateTime CreatedAt, DateTime? StartedAt,
     DateTime? FinishedAt, double? EtaSeconds, string? Error, string? SummaryJson, long? ParentJobId)
 {
+    /// <summary>The container being read (see <see cref="IJobProgress.SetContainer"/>); live snapshots only.</summary>
+    public string? Container { get; init; }
+
+    /// <summary>Labeled live counts in the order they were first set (see <see cref="IJobProgress.SetCount"/>).</summary>
+    public IReadOnlyList<JobCount> Counts { get; init; } = [];
+
     /// <summary>Progress of the current stage, 0..1 (null while the total is unknown).</summary>
     public double? StageFraction => Total > 0 ? Math.Clamp((double)Done / Total, 0, 1) : null;
 
@@ -82,6 +100,9 @@ public sealed record JobSnapshot(
     public static JobSnapshot Of(Job j) => new(j.Id, j.Type, j.Title, j.State, j.Stage, j.StageIndex, j.StageCount, j.Done, j.Total,
         j.CurrentItem, j.Warnings, j.Errors, j.CreatedAt, j.StartedAt, j.FinishedAt, j.EtaSeconds, j.Error, j.SummaryJson, j.ParentJobId);
 }
+
+/// <summary>One labeled live count of a job, e.g. <c>("files found", 1200)</c>.</summary>
+public sealed record JobCount(string Label, long Value);
 
 /// <summary>Live job state for the UI: active jobs and those that just finished.</summary>
 public interface IProgressHub

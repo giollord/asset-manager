@@ -267,4 +267,63 @@ public class JobQueueTests
         progress.SetStage("AI pack pass", 3, 6, 10);
         Assert.Null(progress.Snapshot.EtaSeconds); // a new stage starts a new estimate
     }
+
+    [Fact]
+    public async Task Last_change_in_a_burst_is_published_without_a_further_update()
+    {
+        await using var c = await TestCatalog.CreateAsync();
+        var job = new Job { Type = "t", Title = "t", CreatedAt = DateTime.UtcNow };
+        await using (var db = c.Db())
+        {
+            db.Jobs.Add(job);
+            await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+        var hub = new ProgressHub();
+        var progress = new JobProgress(job, c.Store, hub, new ManualTime(DateTimeOffset.UtcNow));
+
+        progress.SetCurrentItem("first.png");     // published at once
+        progress.SetCurrentItem("big-archive.zip"); // within the 100 ms window: throttled
+        Assert.Equal("first.png", hub.Get(job.Id)!.CurrentItem);
+
+        // Nothing else is reported (a long extraction), yet the latest item arrives.
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (hub.Get(job.Id)!.CurrentItem != "big-archive.zip" && DateTime.UtcNow < deadline)
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        Assert.Equal("big-archive.zip", hub.Get(job.Id)!.CurrentItem);
+    }
+
+    [Fact]
+    public async Task Container_and_counts_are_published_live_and_keep_their_order()
+    {
+        await using var c = await TestCatalog.CreateAsync();
+        var job = new Job { Type = "t", Title = "t", CreatedAt = DateTime.UtcNow };
+        await using (var db = c.Db())
+        {
+            db.Jobs.Add(job);
+            await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+        var time = new ManualTime(DateTimeOffset.UtcNow);
+        var hub = new ProgressHub();
+        var progress = new JobProgress(job, c.Store, hub, time);
+
+        progress.SetContainer("Packs.zip → Forest.unitypackage");
+        progress.SetCount("files found", 1);
+        progress.SetCount("importable", 1);
+        time.Now += TimeSpan.FromSeconds(1);
+        progress.SetCount("files found", 1200); // updated in place, still first
+        time.Now += TimeSpan.FromSeconds(1);
+        progress.SetCount("importable", 800);
+
+        var published = hub.Get(job.Id)!;
+        Assert.Equal("Packs.zip → Forest.unitypackage", published.Container);
+        Assert.Equal([new JobCount("files found", 1200), new JobCount("importable", 800)], published.Counts);
+
+        // Live only: the Job row does not carry them, so history snapshots come without.
+        await using (var db = c.Db())
+        {
+            var row = await db.Jobs.SingleAsync(j => j.Id == job.Id, TestContext.Current.CancellationToken);
+            Assert.Empty(JobSnapshot.Of(row).Counts);
+            Assert.Null(JobSnapshot.Of(row).Container);
+        }
+    }
 }

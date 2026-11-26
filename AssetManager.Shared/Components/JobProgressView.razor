@@ -1,6 +1,7 @@
 @using AssetManager.Core.Domain
 @using AssetManager.Core.Jobs
 @inject IJobQueue Queue
+@implements IDisposable
 @inject Services.UiActions Ui
 
 @* One job's progress, used in the app-bar quick view, the Jobs page and the import wizard (design D8). *@
@@ -32,10 +33,21 @@
             @Job.Stage
             @if (Job.Total > 0) { <span> · @Job.Done.ToString("N0") / @Job.Total.ToString("N0") (@((Job.StageFraction ?? 0).ToString("P0")))</span> }
         </MudText>
+        @if (Job.State == JobState.Running && !string.IsNullOrEmpty(Job.Container))
+        {
+            <MudText Typo="Typo.caption" Class="d-block job-container selectable" Style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
+                <MudIcon Icon="@Icons.Material.Filled.Inventory2" Size="Size.Small" Style="font-size: 0.9rem; vertical-align: text-bottom" /> @Job.Container
+            </MudText>
+        }
         @if (Job.State == JobState.Running && !string.IsNullOrEmpty(Job.CurrentItem))
         {
             <MudText Typo="Typo.caption" Class="d-block job-item selectable" Style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">@Job.CurrentItem</MudText>
         }
+    }
+
+    @if (Job.IsActive && Job.Counts.Count > 0)
+    {
+        <MudText Typo="Typo.caption" Class="d-block job-counts">@string.Join(" · ", Job.Counts.Select(c => $"{c.Value:N0} {c.Label}"))</MudText>
     }
 
     <MudText Typo="Typo.caption" Class="d-block job-times mud-text-secondary">
@@ -58,6 +70,31 @@
     [Parameter] public bool Compact { get; set; }
 
     [Parameter] public EventCallback<long> Retried { get; set; }
+
+    /// <summary>How often the elapsed time and time left are redrawn while the job runs.</summary>
+    private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(1);
+
+    private Timer? _tick;
+
+    /// <summary>
+    /// Spec "Job clock ticks on its own": while the job runs, redraw every second so the elapsed time moves even
+    /// when the job reports nothing and the host page does not re-render. The tick does no I/O.
+    /// </summary>
+    protected override void OnParametersSet()
+    {
+        if (Job.State == JobState.Running)
+            _tick ??= new Timer(_ => _ = InvokeAsync(StateHasChanged), null, TickInterval, TickInterval);
+        else
+            StopTick();
+    }
+
+    private void StopTick()
+    {
+        _tick?.Dispose();
+        _tick = null;
+    }
+
+    public void Dispose() => StopTick();
 
     private string StateText => Job.State switch
     {

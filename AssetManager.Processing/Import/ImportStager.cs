@@ -75,6 +75,15 @@ public sealed class ImportStager(
     /// <summary>A staged file before grouping.</summary>
     private sealed record Entry(SourceFile File, VfsNode Node);
 
+    /// <summary>Live counts an import shows (spec "Import shows what it found so far").</summary>
+    public const string FilesFoundCount = "files found", ImportableCount = "importable", AssetsCount = "assets";
+
+    /// <summary>
+    /// A container for the job's progress, by file names, outermost first: <c>Packs.zip → Forest.unitypackage</c>.
+    /// </summary>
+    public static string ContainerLabel(Location container) =>
+        string.Join(" → ", new[] { container.Path }.Concat(container.Inner).Select(p => Path.GetFileName(p.Replace('/', Path.DirectorySeparatorChar))));
+
     /// <summary>Stages 1 and 2: scan the inputs and group the files into staged sources and assets.</summary>
     public async Task ScanAndGroupAsync(long sessionId, IJobProgress progress, int stageCount, CancellationToken ct = default)
     {
@@ -82,7 +91,12 @@ public sealed class ImportStager(
         await using (var db = catalog.CreateDbContext())
         {
             session = await db.ImportSessions.AsNoTracking().FirstAsync(s => s.Id == sessionId, ct);
-            if (session.StagedThrough >= StageGroup + 1) return;
+            if (session.StagedThrough >= StageGroup + 1)
+            {
+                // Resumed past grouping (e.g. after a restart): the scan counts are gone, the asset count is not.
+                progress.SetCount(AssetsCount, await db.AllAssets.CountAsync(a => a.ImportSessionId == sessionId, ct));
+                return;
+            }
         }
         await ClearStagedAsync(sessionId, ct); // a scan that was interrupted starts over
 
@@ -114,6 +128,7 @@ public sealed class ImportStager(
                     ?? throw new InvalidOperationException("The source to import into no longer exists.");
 
         progress.SetStage("Scanning", StageScan, stageCount);
+        long filesFound = 0, importable = 0;
         foreach (var input in session.Inputs)
         {
             var full = Path.GetFullPath(input);
@@ -132,7 +147,8 @@ public sealed class ImportStager(
                 continue;
             }
 
-            await foreach (var node in vfs.WalkAsync(full, location, ignore: ignore, ct: ct))
+            await foreach (var node in vfs.WalkAsync(full, location, ignore: ignore, ct: ct,
+                               opening: loc => progress.SetContainer(ContainerLabel(loc))))
             {
                 ct.ThrowIfCancellationRequested();
                 if (!Wanted(node)) continue;
@@ -156,6 +172,7 @@ public sealed class ImportStager(
                         Skip(parent, node.RelativePath.Replace('\\', '/'), SkipKind.Ignored, $"ignored folder ({node.Error})", node.Location);
                         break;
                     case VfsNodeKind.ContainerError:
+                        progress.SetContainer(node.Location.Container is { } outer ? ContainerLabel(outer) : null);
                         Skip(parent, node.RelativePath, SkipKind.Error, $"cannot open archive ({node.Error ?? "unreadable"})", node.Location);
                         break;
                     case VfsNodeKind.File when node.DepthLimited:
@@ -163,6 +180,8 @@ public sealed class ImportStager(
                         break;
                     case VfsNodeKind.File:
                     {
+                        progress.SetContainer(node.Location.Container is { } container ? ContainerLabel(container) : null);
+                        progress.SetCount(FilesFoundCount, ++filesFound);
                         // A single plain file given as input is its own source.
                         if (parent is null)
                         {
@@ -177,6 +196,7 @@ public sealed class ImportStager(
                                 Skip(parent, node.RelativePath, SkipKind.Unsupported, $"unsupported file type ({Path.GetExtension(node.RelativePath)})", node.Location);
                                 break;
                             case FileKind.Asset:
+                                progress.SetCount(ImportableCount, ++importable);
                                 if (!entries.TryGetValue(parent, out var list)) entries[parent] = list = [];
                                 list.Add(new Entry(new SourceFile(node.RelativePath, node.LocalPath, c) { UnityGuid = node.UnityGuid }, node));
                                 break;
@@ -198,6 +218,7 @@ public sealed class ImportStager(
         }
         await volumes.RememberAsync(volumeIds, ct);
 
+        progress.SetContainer(null);
         progress.SetStage("Grouping files", StageGroup, stageCount, entries.Values.Sum(l => l.Count));
         var now = DateTime.UtcNow;
         await using (var db = catalog.CreateDbContext())
@@ -234,6 +255,7 @@ public sealed class ImportStager(
                 }
             }
             await db.SaveChangesAsync(ct);
+            progress.SetCount(AssetsCount, created.Count);
 
             // Unity's embedded previews: the fallback when a file cannot be rendered.
             foreach (var (asset, node) in created)

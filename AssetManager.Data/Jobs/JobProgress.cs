@@ -35,7 +35,7 @@ public sealed class ProgressHub : IProgressHub
 
 /// <summary>
 /// The <see cref="IJobProgress"/> of one running job: keeps the live snapshot, publishes it to the hub (at most
-/// every 100 ms), persists it to the Job row (at most once per second, and at every stage change), buffers item
+/// every 100 ms, with a trailing publish so the latest change always arrives), persists it to the Job row (at most once per second, and at every stage change), buffers item
 /// errors, and estimates the remaining time from an exponential moving average of the per-item time in the stage.
 /// </summary>
 public sealed class JobProgress : IJobProgress
@@ -59,6 +59,10 @@ public sealed class JobProgress : IJobProgress
     private double? _secondsPerItem;
     private bool _dirty;
     private bool _forcePersist;
+    private bool _finished;
+    private ITimer? _trailing;
+    private string? _container;
+    private readonly List<JobCount> _counts = [];
 
     public JobProgress(Job job, CatalogStore catalog, ProgressHub hub, TimeProvider? time = null)
     {
@@ -71,8 +75,11 @@ public sealed class JobProgress : IJobProgress
 
     public JobSnapshot Snapshot
     {
-        get { lock (_lock) return JobSnapshot.Of(_job); }
+        get { lock (_lock) return Live(); }
     }
+
+    /// <summary>The job's snapshot plus the live-only fields (container, counts). Called under <see cref="_lock"/>.</summary>
+    private JobSnapshot Live() => JobSnapshot.Of(_job) with { Container = _container, Counts = [.. _counts] };
 
     /// <summary>Current moving-average seconds per item (null until two advances happened in the stage).</summary>
     public double? SecondsPerItem
@@ -115,6 +122,15 @@ public sealed class JobProgress : IJobProgress
 
     public void SetCurrentItem(string? item) => Update(() => _job.CurrentItem = item);
 
+    public void SetContainer(string? container) => Update(() => _container = container);
+
+    public void SetCount(string label, long value) => Update(() =>
+    {
+        var i = _counts.FindIndex(c => c.Label == label);
+        if (i >= 0) _counts[i] = new JobCount(label, value);
+        else _counts.Add(new JobCount(label, value));
+    });
+
     public void Warn(string itemRef, string? itemName, string reason) => Update(() =>
     {
         _job.Warnings++;
@@ -147,7 +163,11 @@ public sealed class JobProgress : IJobProgress
             if (now - _lastPublish >= PublishEvery)
             {
                 _lastPublish = now;
-                publish = JobSnapshot.Of(_job);
+                publish = Live();
+            }
+            else
+            {
+                ArmTrailingPublish(now);
             }
             if (_forcePersist || now - _lastPersist >= PersistEvery)
             {
@@ -158,6 +178,32 @@ public sealed class JobProgress : IJobProgress
         }
         if (publish is not null) _hub.Publish(publish);
         if (persist) _ = PersistAsync(CancellationToken.None);
+    }
+
+    /// <summary>
+    /// A throttled change must still reach the UI: e.g. the name of an archive set just before a long extraction
+    /// would otherwise stay unpublished until the next change. Arms one timer for the end of the publish window.
+    /// Called under <see cref="_lock"/>.
+    /// </summary>
+    private void ArmTrailingPublish(DateTimeOffset now)
+    {
+        if (_trailing is not null || _finished) return;
+        var wait = PublishEvery - (now - _lastPublish);
+        if (wait < TimeSpan.FromMilliseconds(1)) wait = TimeSpan.FromMilliseconds(1);
+        _trailing = _time.CreateTimer(_ => PublishTrailing(), null, wait, Timeout.InfiniteTimeSpan);
+    }
+
+    private void PublishTrailing()
+    {
+        lock (_lock)
+        {
+            _trailing?.Dispose();
+            _trailing = null;
+            // Published under the lock, so a finished job can never be re-added to the hub's active list.
+            if (_finished) return;
+            _lastPublish = _time.GetUtcNow();
+            _hub.Publish(Live());
+        }
     }
 
     /// <summary>Marks the job running and publishes it.</summary>
@@ -185,6 +231,10 @@ public sealed class JobProgress : IJobProgress
             _job.EtaSeconds = null;
             if (state == JobState.Completed) _job.CurrentItem = null;
             _dirty = true;
+            _finished = true;
+            _container = null;
+            _trailing?.Dispose();
+            _trailing = null;
         }
         await PersistAsync(CancellationToken.None);
         var final = Snapshot;

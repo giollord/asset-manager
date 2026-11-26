@@ -83,6 +83,37 @@ public class JobUiTests : BunitContext
     }
 
     [Fact]
+    public void Progress_view_shows_container_and_counts()
+    {
+        var job = Job(11, JobState.Running, stage: "Scanning", stageCount: 6) with
+        {
+            CurrentItem = "Textures/bark.png",
+            Container = "Packs.zip → Forest.unitypackage",
+            Counts = [new JobCount("files found", 1200), new JobCount("importable", 800)],
+        };
+        var cut = Render<JobProgressView>(p => p.Add(x => x.Job, job));
+
+        Assert.Contains("Packs.zip → Forest.unitypackage", cut.Find(".job-container").TextContent);
+        Assert.Equal("Textures/bark.png", cut.Find(".job-item").TextContent);
+        Assert.Equal($"{1200:N0} files found · 800 importable", cut.Find(".job-counts").TextContent);
+
+        // Plain files: no container line.
+        cut.Render(p => p.Add(x => x.Job, job with { Container = null }));
+        Assert.Empty(cut.FindAll(".job-container"));
+    }
+
+    [Fact]
+    public void Elapsed_time_ticks_without_new_progress()
+    {
+        // Spec "Job clock ticks on its own": the same snapshot, no new parameters, yet the clock moves.
+        var job = Job(10, JobState.Running) with { StartedAt = DateTime.UtcNow.AddSeconds(-58.5) };
+        var cut = Render<JobProgressView>(p => p.Add(x => x.Job, job));
+        Assert.Contains("Elapsed 58 s", cut.Find(".job-times").TextContent);
+
+        cut.WaitForAssertion(() => Assert.Contains("Elapsed 1 min", cut.Find(".job-times").TextContent), TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
     public void Indicator_shows_active_count_and_disappears_when_done()
     {
         var popovers = Render<MudBlazor.MudPopoverProvider>();
