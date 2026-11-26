@@ -165,4 +165,124 @@ public class ImageHandlerTests
         }
         return ids;
     }
+
+    // ---- measured pixel art (design D4, spec "Pixel-art detection") ----
+
+    /// <summary>Random <paramref name="art"/>-pixel art from <paramref name="colors"/> palette colours, with transparent pixels, upscaled k× with nearest neighbour.</summary>
+    internal static MagickImage PixelArt(int art, int k, int colors, int seed = 1)
+    {
+        var rng = new Random(seed);
+        var palette = Enumerable.Range(0, colors).Select(_ => new MagickColor((byte)rng.Next(256), (byte)rng.Next(256), (byte)rng.Next(256))).ToArray();
+        var img = new MagickImage(MagickColors.Transparent, (uint)art, (uint)art);
+        var draw = new ImageMagick.Drawing.Drawables();
+        for (var y = 0; y < art; y++)
+            for (var x = 0; x < art; x++)
+                if (rng.Next(5) > 0) draw.FillColor(palette[rng.Next(colors)]).Point(x, y);
+        draw.Draw(img);
+        if (k > 1)
+        {
+            img.FilterType = FilterType.Point;
+            img.Resize((uint)(art * k), (uint)(art * k));
+        }
+        return img;
+    }
+
+    private static async Task<ImageMetadata> MeasureAsync(TempDir dir, MagickImage image, string name)
+    {
+        var path = Path.Combine(dir.Path, name);
+        image.Write(path, MagickFormat.Png);
+        var item = Item(path);
+        await Processor.ProcessAsync(item, new PreviewOptions());
+        return item.Asset.Image!;
+    }
+
+    [Fact]
+    public async Task Upscaled_16px_art_is_pixel_art_with_scale_4()
+    {
+        using var dir = FixtureBuilder.TempDir();
+        using var img = PixelArt(16, 4, 12);
+        var path = Path.Combine(dir.Path, "hero.png");
+        img.Write(path, MagickFormat.Png);
+        var item = Item(path);
+
+        await Processor.ProcessAsync(item, new PreviewOptions());
+
+        Assert.Equal((true, 4), (item.Asset.Image!.IsPixelArt, item.Asset.Image.PixelScale));
+        Assert.Contains("pixel art", item.Asset.Style); // style set from the measurement
+    }
+
+    [Fact]
+    public async Task Smooth_2048px_gradient_is_not_pixel_art()
+    {
+        using var dir = FixtureBuilder.TempDir();
+        using var img = new MagickImage("gradient:#203060-#e0c080", 2048, 2048);
+        img.Blur(0, 4);
+        var meta = await MeasureAsync(dir, img, "painting.png");
+        Assert.False(meta.IsPixelArt);
+        Assert.Equal(1, meta.PixelScale);
+    }
+
+    [Fact]
+    public async Task Native_32_colour_icon_is_pixel_art()
+    {
+        using var dir = FixtureBuilder.TempDir();
+        using var img = PixelArt(32, 1, 32, seed: 7);
+        var meta = await MeasureAsync(dir, img, "icon.png");
+        Assert.Equal((true, 1), (meta.IsPixelArt, meta.PixelScale));
+    }
+
+    [Fact]
+    public async Task Anti_aliased_upscale_is_not_pixel_art()
+    {
+        using var dir = FixtureBuilder.TempDir();
+        using var img = PixelArt(16, 1, 12);
+        img.FilterType = FilterType.Lanczos; // smooth resampling blends colours at every edge
+        img.Resize(256, 256);
+        var meta = await MeasureAsync(dir, img, "blurry.png");
+        Assert.False(meta.IsPixelArt);
+    }
+
+    [Fact]
+    public async Task User_edited_style_is_not_changed()
+    {
+        using var dir = FixtureBuilder.TempDir();
+        using var img = PixelArt(16, 2, 8);
+        var path = Path.Combine(dir.Path, "kept.png");
+        img.Write(path, MagickFormat.Png);
+        var item = Item(path);
+        item.Asset.Style = ["retro"];
+        item.Asset.UserEdited = EditedFields.Style;
+
+        await Processor.ProcessAsync(item, new PreviewOptions());
+
+        Assert.True(item.Asset.Image!.IsPixelArt);
+        Assert.Equal(["retro"], item.Asset.Style);
+    }
+
+    [Fact]
+    public async Task Sheet_with_small_cells_gets_a_sharper_sprite_sheet_preview()
+    {
+        // 2048×128: 64×4 cells of 32 px; the 512 px thumbnail would show 8 px per cell.
+        using var dir = FixtureBuilder.TempDir();
+        using (var img = new MagickImage(MagickColors.Transparent, 2048, 128))
+        {
+            var d = new ImageMagick.Drawing.Drawables().FillColor(MagickColors.Teal);
+            for (var y = 0; y < 4; y++)
+                for (var x = 0; x < 64; x++) d.Rectangle(x * 32 + 4, y * 32 + 4, x * 32 + 27, y * 32 + 27 - x % 5);
+            d.Draw(img);
+            img.Write(Path.Combine(dir.Path, "tiles.png"), MagickFormat.Png);
+        }
+        var item = Item(Path.Combine(dir.Path, "tiles.png"));
+
+        var result = await Processor.ProcessAsync(item, new PreviewOptions());
+
+        Assert.Equal(AssetType.SpriteSheet, item.Asset.Type);
+        Assert.Equal((32, 64, 4), (item.Asset.SpriteSheet!.Grid!.CellW, item.Asset.SpriteSheet.Grid.Columns, item.Asset.SpriteSheet.Grid.Rows));
+        Assert.Equal(512, result.Previews.Single(p => p.Kind == PreviewKind.Thumbnail).Width);
+        var sheet = result.Previews.Single(p => p.Kind == PreviewKind.SpriteSheet);
+        Assert.Equal((2048, 128), (sheet.Width, sheet.Height)); // ≥ 64 px per cell would upscale: kept at the original size
+
+        // A thumbnail at the original size is already as sharp as it gets: no extra preview.
+        Assert.DoesNotContain((await Processor.ProcessAsync(item, new PreviewOptions { ImageMaxEdge = 4096 })).Previews, p => p.Kind == PreviewKind.SpriteSheet);
+    }
 }

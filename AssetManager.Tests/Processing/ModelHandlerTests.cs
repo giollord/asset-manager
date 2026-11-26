@@ -21,6 +21,22 @@ public class ModelHandlerTests
         Companions = companions,
     };
 
+    /// <summary>An OBJ's .mtl companion (claimed by name) is not a texture: rendering it as one failed the preview.</summary>
+    [Fact]
+    public void A_material_library_companion_is_not_used_as_a_texture()
+    {
+        using var dir = FixtureBuilder.TempDir();
+        var path = Write(dir, "tree.obj", Box(new BoxOptions { Material = "Bark" }), "obj");
+        var mtl = Path.ChangeExtension(path, ".mtl");
+        File.WriteAllLines(mtl, ["newmtl Bark", "Kd 0.6 0.6 0.6"]);
+        var item = Item(path, new CompanionInput(new AssetFile { FileName = "tree.mtl", RelativePath = "tree.mtl", Extension = ".mtl" }, mtl));
+        using var model = ModelAnalyzer.Load(path);
+
+        var (textures, _, _) = ModelHandler.ResolveTextures(model.Scene, item, includeBytes: false);
+
+        Assert.Empty(textures);
+    }
+
     [Fact]
     public async Task Fbx_stats_match()
     {

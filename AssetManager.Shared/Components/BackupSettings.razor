@@ -1,0 +1,153 @@
+@using AssetManager.Core.Jobs
+@using AssetManager.Core.Platform
+@using AssetManager.Data.Services
+@implements IDisposable
+@inject CatalogBackupService Backups
+@inject IAppSettingsStore Settings
+@inject AssetManager.Data.CatalogStore Catalog
+@inject IProgressHub Hub
+@inject IJobQueue Jobs
+@inject IFolderPicker Folders
+@inject IDialogService Dialogs
+@inject UiActions Ui
+@inject ISnackbar Snackbar
+
+@* Catalog backups and restore (specs "Catalog backups", "Backup schedule and retention", "Restore"; design D12). *@
+<MudPaper Class="pa-4" Outlined="true" id="backup-settings">
+    <MudText Typo="Typo.h6" Class="mb-2">@Title</MudText>
+    <MudText Typo="Typo.body2" Class="mud-text-secondary">
+        A backup is a complete copy of the catalog (assets, tags, previews and stored originals) as of one moment, made while you keep working.
+    </MudText>
+    <MudGrid Spacing="2" Class="mt-1">
+        <MudItem xs="12" md="6">
+            <MudSelect T="BackupSchedule" Value="Settings.Current.BackupSchedule" ValueChanged="v => Settings.Update(s => s.BackupSchedule = v)" Label="Automatic backup"
+                       Margin="Margin.Dense" Dense="true" id="backup-schedule">
+                <MudSelectItem Value="BackupSchedule.Daily">At startup, when the last backup is older than a day</MudSelectItem>
+                <MudSelectItem Value="BackupSchedule.Weekly">At startup, when the last backup is older than a week</MudSelectItem>
+                <MudSelectItem Value="BackupSchedule.Off">Off</MudSelectItem>
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="12" md="6">
+            <MudNumericField T="int" Value="Settings.Current.BackupKeep" ValueChanged="v => Settings.Update(s => s.BackupKeep = Math.Max(1, v))" Min="1" Max="100"
+                             Label="Automatic backups to keep" HelperText="Older automatic backups are deleted. Manual backups are kept until you delete them. Default 5."
+                             Margin="Margin.Dense" id="backup-keep" />
+        </MudItem>
+    </MudGrid>
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-2" Wrap="Wrap.Wrap">
+        <MudText Typo="Typo.body2">Backup folder: <b class="selectable" id="backup-folder">@Backups.Folder</b></MudText>
+        <MudButton Size="Size.Small" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Folder" OnClick="PickFolderAsync" id="backup-folder-change">Change</MudButton>
+        @if (Settings.Current.BackupFolder is not null)
+        {
+            <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="() => Settings.Update(s => s.BackupFolder = null)" id="backup-folder-default">Use default</MudButton>
+        }
+    </MudStack>
+    <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Backup" OnClick="BackUpNowAsync" Disabled="_running" Class="mt-2" id="backup-now">Back up now</MudButton>
+
+    <MudText Typo="Typo.subtitle2" Class="mt-4">Backups of this catalog</MudText>
+    @if (_list.Count == 0)
+    {
+        <MudText Typo="Typo.body2" Class="mud-text-secondary" id="backup-none">No backups yet.</MudText>
+    }
+    else
+    {
+        <MudSimpleTable Dense="true" Elevation="0" Style="max-width: 760px" id="backup-list">
+            <thead><tr><th>Date</th><th>Size</th><th>Kind</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var b in _list)
+                {
+                    <tr class="backup-row" data-file="@b.FileName">
+                        <td class="selectable" title="@b.Path">@b.CreatedAt.ToString("g")</td>
+                        <td>@CatalogBackupService.Bytes(b.Size)</td>
+                        <td>@(b.Manual ? "Manual" : "Automatic")</td>
+                        <td style="text-align: right">
+                            <MudButton Size="Size.Small" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Restore" Class="backup-restore"
+                                       Disabled="_restoring" OnClick="() => RestoreAsync(b)">Restore</MudButton>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </MudSimpleTable>
+    }
+    @if (_restoring)
+    {
+        <MudProgressLinear Indeterminate="true" Class="mt-2" id="backup-restoring" />
+    }
+</MudPaper>
+
+@code {
+    public const string Title = "Backups";
+
+    public static readonly string[] SearchTerms = [Title, "Automatic backup", "Automatic backups to keep", "Backup folder", "Back up now", "Restore", "Backups of this catalog"];
+
+    private IReadOnlyList<CatalogBackup> _list = [];
+    private bool _running;
+    private bool _restoring;
+
+    protected override void OnInitialized()
+    {
+        Hub.Changed += OnJob;
+        Hub.Finished += OnJob;
+        Settings.Changed += OnSettings;
+        Catalog.Opened += Refresh;
+        Load();
+    }
+
+    private void Load()
+    {
+        try { _list = Backups.List(); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { _list = []; }
+        _running = Hub.Active.Any(j => j.Type == CatalogBackupJob.JobType);
+    }
+
+    private void Refresh() => InvokeAsync(() => { Load(); StateHasChanged(); });
+
+    private void OnJob(JobSnapshot job)
+    {
+        if (job.Type == CatalogBackupJob.JobType) Refresh();
+    }
+
+    private void OnSettings(AppSettings _) => Refresh();
+
+    private Task BackUpNowAsync() => Ui.RunAsync(async () =>
+    {
+        await Jobs.EnqueueAsync(CatalogBackupJob.JobType, "Back up the catalog", new BackupPayload(true));
+        _running = true;
+    }, "Backing up the catalog…");
+
+    private async Task PickFolderAsync()
+    {
+        try
+        {
+            if (await Folders.PickFolderAsync() is { } folder) Settings.Update(s => s.BackupFolder = folder);
+        }
+        catch (PlatformFeatureNotSupportedException e) { Snackbar.Add(e.Message, Severity.Warning); }
+    }
+
+    public static string RestoreQuestion(CatalogBackup b) =>
+        $"Restore the catalog from the {(b.Manual ? "manual" : "automatic")} backup of {b.CreatedAt:g}? Running jobs (imports, AI enrichment, exports) are cancelled first. " +
+        "The current catalog is saved as a manual backup before it is replaced, so you can go back to it.";
+
+    private async Task RestoreAsync(CatalogBackup b)
+    {
+        var ok = await Dialogs.ShowMessageBoxAsync("Restore backup", RestoreQuestion(b), yesText: "Cancel jobs and restore", cancelText: "Cancel");
+        if (ok != true) return;
+        _restoring = true;
+        try
+        {
+            await Ui.RunAsync(() => Backups.RestoreAsync(b.Path), $"Catalog restored from the backup of {b.CreatedAt:g}.");
+        }
+        finally
+        {
+            _restoring = false;
+            Load();
+        }
+    }
+
+    public void Dispose()
+    {
+        Hub.Changed -= OnJob;
+        Hub.Finished -= OnJob;
+        Settings.Changed -= OnSettings;
+        Catalog.Opened -= Refresh;
+    }
+}

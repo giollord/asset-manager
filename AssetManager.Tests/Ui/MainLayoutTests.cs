@@ -28,12 +28,22 @@ public class MainLayoutTests : BunitContext
         public void RaiseChanged() => Changed?.Invoke();
     }
 
+    private sealed class NoShell : IShellService
+    {
+        public Task OpenAsync(string path, CancellationToken ct = default) => Task.CompletedTask;
+        public Task RevealAsync(string path, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
     public MainLayoutTests()
     {
         Services.AddMudServices();
-        Services.AddSingleton<IAppSettingsStore>(new JsonAppSettingsStore(Path.Combine(_dir.Path, "settings.json")));
+        var settings = new JsonAppSettingsStore(Path.Combine(_dir.Path, "settings.json"));
+        Services.AddSingleton<IAppSettingsStore>(settings);
+        Services.AddSingleton(new AssetManager.Core.Updates.UpdateChecker(settings));
+        Services.AddSingleton<IShellService>(new NoShell());
         Services.AddSingleton(new AppStartup([], NullLogger<AppStartup>.Instance));
         Services.AddSingleton<FileDropBroker>();
+        Services.AddSingleton<DragOutState>();
         Services.AddSingleton<IProgressHub>(new ProgressHub());
         Services.AddSingleton<AssetManager.Shared.Services.WebViewModelRenderer>();
         JSInterop.Mode = JSRuntimeMode.Loose;

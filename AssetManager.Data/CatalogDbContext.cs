@@ -15,6 +15,8 @@ public class CatalogDbContext(DbContextOptions<CatalogDbContext> options) : DbCo
     public DbSet<AssetFile> AssetFiles => Set<AssetFile>();
     public DbSet<Tag> Tags => Set<Tag>();
     public DbSet<AssetTag> AssetTags => Set<AssetTag>();
+    public DbSet<SourceTag> SourceTags => Set<SourceTag>();
+    public DbSet<AssetTagOptOut> AssetTagOptOuts => Set<AssetTagOptOut>();
     public DbSet<Collection> Collections => Set<Collection>();
     public DbSet<PreviewBlob> Previews => Set<PreviewBlob>();
     public DbSet<StoredFile> StoredFiles => Set<StoredFile>();
@@ -58,10 +60,14 @@ public class CatalogDbContext(DbContextOptions<CatalogDbContext> options) : DbCo
             e.HasIndex(a => a.IsStored);
             e.HasIndex(a => a.EmbeddingDirty);
             e.HasIndex(a => a.ScaleAnomaly);
+            e.HasIndex(a => a.Favorite);
+            e.HasIndex(a => a.Rating);
+            e.HasIndex(a => a.GridUncertain);
             e.ComplexProperty(a => a.LicenseOverride);
             JsonColumn(e.Property(a => a.Colors));
             JsonColumn(e.Property(a => a.LinksOverride));
             JsonColumn(e.Property(a => a.Image));
+            JsonColumn(e.Property(a => a.SpriteSheet));
             JsonColumn(e.Property(a => a.Audio));
             JsonColumn(e.Property(a => a.Model));
             JsonColumn(e.Property(a => a.Font));
@@ -95,6 +101,21 @@ public class CatalogDbContext(DbContextOptions<CatalogDbContext> options) : DbCo
             e.HasIndex(t => t.TagId);
             e.HasOne(t => t.Asset).WithMany(a => a.Tags).HasForeignKey(t => t.AssetId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(t => t.Tag).WithMany(t => t.Assets).HasForeignKey(t => t.TagId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<SourceTag>(e =>
+        {
+            e.HasKey(t => new { t.SourceId, t.TagId });
+            e.HasIndex(t => t.TagId);
+            e.HasOne<Source>().WithMany().HasForeignKey(t => t.SourceId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(t => t.Tag).WithMany().HasForeignKey(t => t.TagId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<AssetTagOptOut>(e =>
+        {
+            e.HasKey(t => new { t.AssetId, t.TagId });
+            e.HasOne<Asset>().WithMany().HasForeignKey(t => t.AssetId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<Tag>().WithMany().HasForeignKey(t => t.TagId).OnDelete(DeleteBehavior.Cascade);
         });
 
         b.Entity<Collection>(e => e.HasIndex(c => c.Name));

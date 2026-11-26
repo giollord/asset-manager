@@ -1,0 +1,171 @@
+@using AssetManager.Processing.Handlers
+@inject ModelTextureService Textures
+@inject UiActions Ui
+
+@* A model's textures in the details drawer (spec "Reviewing a model's textures", design D20): each companion texture with
+   its material, slot and how it was found; detach, AI suggestions to apply or dismiss, and choosing a texture of the
+   source for a material. Every change re-renders the previews. *@
+<MudPaper Outlined="true" Class="pa-2 mt-2" id="details-textures">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+        <MudText Typo="Typo.subtitle2" Style="flex: 1">Textures</MudText>
+        @if (_busy) { <MudProgressCircular Indeterminate="true" Size="Size.Small" /> }
+        @if (_view?.UserEdited == true) { <MudChip T="string" Size="Size.Small" id="textures-edited" title="Texture matching and re-enrichment leave these textures alone">edited</MudChip> }
+        <MudButton Size="Size.Small" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Texture" OnClick="StartChooseAsync" Disabled="_busy || _choose is not null"
+                   id="texture-choose">Choose a texture</MudButton>
+    </MudStack>
+
+    @if (_view is null)
+    {
+        <MudProgressLinear Indeterminate="true" />
+    }
+    else
+    {
+        @if (_view.Textures.Count == 0)
+        {
+            <MudText Typo="Typo.caption" Class="mud-text-secondary" id="textures-none">No textures.</MudText>
+        }
+        @foreach (var t in _view.Textures)
+        {
+            <div class="texture-row" data-file="@t.FileId" style="display: flex; align-items: center; gap: 8px; padding: 2px 0">
+                @if (t.Thumbnail is { } thumb)
+                {
+                    <img src="@thumb" alt="" width="32" height="32" class="preview-surface" style="object-fit: contain; border-radius: 2px" />
+                }
+                else
+                {
+                    <MudIcon Icon="@Icons.Material.Outlined.Texture" Size="Size.Small" title="Original not available" />
+                }
+                <div style="flex: 1; min-width: 0">
+                    <MudText Typo="Typo.body2" Class="selectable" Style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap" title="@t.RelativePath">@t.FileName</MudText>
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary">@(t.Material is { Length: > 0 } m ? m : "all materials") · @SlotLabel(t.Slot)</MudText>
+                </div>
+                <MudChip T="string" Size="Size.Small" Class="texture-origin" Color="@(t.Origin == AssetManager.Core.Domain.CompanionOrigin.Ai ? Color.Info : Color.Default)">@t.OriginLabel</MudChip>
+                <MudIconButton Icon="@Icons.Material.Filled.LinkOff" Size="Size.Small" Class="texture-detach" title="Detach this texture" Disabled="_busy"
+                               OnClick="() => DetachAsync(t)" />
+            </div>
+        }
+
+        @foreach (var s in _view.Suggestions)
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Class="mt-1 texture-suggestion" data-material="@s.Material" NoIcon="true">
+                <div>
+                    Suggested for <b>@s.Material</b>: <span class="selectable" title="@s.RelativePath">@FileName(s.RelativePath)</span>
+                    <span class="mud-text-secondary">(@($"{s.Confidence:P0}") sure@(s.Reason.Length > 0 ? $": {s.Reason}" : ""))</span>
+                </div>
+                <MudStack Row="true" Spacing="1" Class="mt-1">
+                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" Class="texture-apply" Disabled="_busy" OnClick="() => ApplyAsync(s)">Apply</MudButton>
+                    <MudButton Size="Size.Small" Variant="Variant.Text" Class="texture-dismiss" Disabled="_busy" OnClick="() => DismissAsync(s)">Dismiss</MudButton>
+                </MudStack>
+            </MudAlert>
+        }
+
+        @if (_choose is { } c)
+        {
+            <MudPaper Outlined="true" Class="pa-2 mt-2" id="texture-choose-form">
+                <MudSelect T="string" @bind-Value="c.Material" Label="Material" Margin="Margin.Dense" Dense="true" id="texture-choose-material">
+                    @foreach (var m in c.Materials) { <MudSelectItem Value="m">@(m.Length > 0 ? m : "(unnamed)")</MudSelectItem> }
+                </MudSelect>
+                <MudSelect T="long" @bind-Value="c.FileId" Label="Texture" Margin="Margin.Dense" Dense="true" id="texture-choose-file">
+                    @foreach (var f in c.Choices) { <MudSelectItem Value="f.FileId">@f.RelativePath</MudSelectItem> }
+                </MudSelect>
+                <MudStack Row="true" Spacing="1" Class="mt-2" Justify="Justify.FlexEnd">
+                    <MudButton Size="Size.Small" OnClick="() => _choose = null" id="texture-choose-cancel">Cancel</MudButton>
+                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" Disabled="_busy || c.FileId == 0 || c.Material is null"
+                               OnClick="ChooseAsync" id="texture-choose-attach">Attach &amp; re-render</MudButton>
+                </MudStack>
+            </MudPaper>
+        }
+    }
+</MudPaper>
+
+@code {
+    [Parameter, EditorRequired] public long AssetId { get; set; }
+
+    /// <summary>Raised after a change re-rendered the previews.</summary>
+    [Parameter] public EventCallback OnChanged { get; set; }
+
+    private sealed class ChooseState
+    {
+        public IReadOnlyList<string> Materials { get; init; } = [];
+        public IReadOnlyList<TextureCandidate> Choices { get; init; } = [];
+        public string? Material { get; set; }
+        public long FileId { get; set; }
+    }
+
+    private ModelTexturesView? _view;
+    private ChooseState? _choose;
+    private bool _busy;
+    private long _loaded;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loaded == AssetId) return;
+        _loaded = AssetId;
+        _choose = null;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync() => _view = await Ui.RunAsync(() => Textures.LoadAsync(AssetId));
+
+    private static string SlotLabel(string? slot) => slot switch
+    {
+        "map" or null => "base colour",
+        "normalMap" => "normal map",
+        "emissiveMap" => "emissive",
+        _ => slot,
+    };
+
+    private static string FileName(string path) => path[(path.LastIndexOf('/') + 1)..];
+
+    private async Task ChangeAsync(Func<Task> change, string done)
+    {
+        _busy = true;
+        try
+        {
+            if (await Ui.RunAsync(change, done))
+            {
+                await LoadAsync();
+                await OnChanged.InvokeAsync();
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private Task DetachAsync(ModelTextureRow t) =>
+        ChangeAsync(() => Textures.DetachAsync(AssetId, t.FileId), $"Detached {t.FileName}; the previews were re-rendered.");
+
+    private Task ApplyAsync(AssetManager.Core.Domain.TextureSuggestion s) =>
+        ChangeAsync(() => Textures.ApplySuggestionAsync(AssetId, s.Material), $"Attached {FileName(s.RelativePath)}; the previews were re-rendered.");
+
+    private async Task DismissAsync(AssetManager.Core.Domain.TextureSuggestion s)
+    {
+        if (await Ui.RunAsync(() => Textures.DismissSuggestionAsync(AssetId, s.Material))) await LoadAsync();
+    }
+
+    private async Task StartChooseAsync()
+    {
+        _busy = true;
+        try
+        {
+            var materials = await Ui.RunAsync(() => Textures.MaterialsAsync(AssetId));
+            var choices = await Ui.RunAsync(() => Textures.ChoicesAsync(AssetId));
+            if (materials is null || choices is null) return;
+            _choose = new ChooseState { Materials = materials, Choices = choices, Material = materials.FirstOrDefault() };
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ChooseAsync()
+    {
+        var c = _choose!;
+        var file = c.Choices.First(f => f.FileId == c.FileId);
+        await ChangeAsync(() => Textures.ChooseAsync(AssetId, c.Material!, c.FileId), $"Attached {file.FileName}; the previews were re-rendered.");
+        if (!_busy) _choose = null;
+    }
+}

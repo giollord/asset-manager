@@ -3,6 +3,7 @@
 @inject IAppSettingsStore Settings
 @inject AppStartup Startup
 @inject AssetManager.Core.Platform.FileDropBroker Drops
+@inject AssetManager.Core.Platform.DragOutState DragOutState
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @inject ISnackbar Snackbar
@@ -12,7 +13,12 @@
 <MudPopoverProvider />
 <MudDialogProvider />
 <MudSnackbarProvider />
+@if (_dragOutStatus is not null)
+{
+    <div class="dragout-status" id="dragout-status"><MudProgressCircular Size="Size.Small" Indeterminate="true" /> @_dragOutStatus</div>
+}
 <JobNotifications />
+<UpdateNotice />
 <PreviewRenderHost />
 
 <MudLayout>
@@ -58,6 +64,8 @@
     {
         Settings.Changed += OnSettingsChanged;
         Drops.Dropped += OnFilesDropped;
+        DragOutState.StatusChanged += OnDragOutStatus;
+        DragOutState.Problem += OnDragOutProblem;
         Chrome.Changed += OnChromeChanged;
         Nav.LocationChanged += OnLocationChanged;
         _path = new Uri(Nav.Uri).AbsolutePath;
@@ -121,6 +129,16 @@
 
     private DotNetObjectReference<MainLayout>? _selfRef;
 
+    private string? _dragOutStatus;
+
+    private void OnDragOutStatus(string? status) => InvokeAsync(() =>
+    {
+        _dragOutStatus = status;
+        StateHasChanged();
+    });
+
+    private void OnDragOutProblem(string message) => InvokeAsync(() => Snackbar.Add(message, Severity.Warning));
+
     /// <summary>Dropped files go to the import page, which takes them from the broker.</summary>
     private void OnFilesDropped() => InvokeAsync(() =>
     {
@@ -159,6 +177,8 @@
     {
         Settings.Changed -= OnSettingsChanged;
         Drops.Dropped -= OnFilesDropped;
+        DragOutState.StatusChanged -= OnDragOutStatus;
+        DragOutState.Problem -= OnDragOutProblem;
         Chrome.Changed -= OnChromeChanged;
         Nav.LocationChanged -= OnLocationChanged;
         _selfRef?.Dispose();

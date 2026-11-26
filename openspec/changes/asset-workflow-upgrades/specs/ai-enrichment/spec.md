@@ -66,3 +66,22 @@ For images, the item enrichment output SHALL also say whether the item looks lik
 #### Scenario: Hint checked by the detector
 - **WHEN** the AI says an image is a sprite sheet with 6 frames, and the grid detector finds a 6×1 grid with high confidence
 - **THEN** the asset becomes a sprite sheet with that grid
+
+### Requirement: Choosing a model's texture
+For each material that needs texture matching and has no name match, the system SHALL render the model from one view: once as it is, and once with each of the material's best candidates (up to 4) as its base colour. The AI SHALL see:
+- the numbered renders
+- the model's name and the material's name
+- each candidate's file name and folder
+
+It SHALL answer the candidate that makes the model look as intended (0 for none), a confidence from 0 to 1 and a short reason. The step SHALL run in the item pass, before the model's description, and SHALL be able to be turned off in Settings → AI.
+
+#### Scenario: None fits
+- **WHEN** every candidate render shows the texture smeared or mismatched on the model
+- **THEN** the AI answers 0, nothing is attached or suggested, and the model stays as it was
+
+### Requirement: Texture choice consistency
+The candidates SHALL be asked a second time in another order, and a different answer SHALL count as unsure (confidence 0). Without image input, the best-ranked candidate SHALL only become a suggestion.
+
+#### Scenario: Order changes the answer
+- **WHEN** the AI picks candidate 2 and then, with the order reversed, a different texture
+- **THEN** the choice counts as unsure and nothing is attached

@@ -8,6 +8,8 @@
     <MudText Typo="Typo.body2" Class="mb-3">These run as background jobs; follow them on the Jobs page.</MudText>
     <MudStack Row="true" Spacing="2" Wrap="Wrap.Wrap">
         <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Refresh" OnClick="RegenerateAsync" id="regenerate-outdated">Regenerate outdated previews</MudButton>
+        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.GridOn" OnClick="RedetectAsync" id="redetect-sprites"
+                   title="Look again for sprite sheets and pixel art in all images whose originals are available; your own edits are kept">Re-detect sprite sheets and pixel art</MudButton>
     </MudStack>
 </MudPaper>
 
@@ -15,7 +17,11 @@
     public const string Title = "Maintenance";
 
     /// <summary>The section's title and setting names, for the Settings search (design D8).</summary>
-    public static readonly string[] SearchTerms = [Title, "Regenerate outdated previews"];
+    public static readonly string[] SearchTerms = [Title, "Regenerate outdated previews", "Re-detect sprite sheets and pixel art"];
+
+    private Task RedetectAsync() => Ui.RunAsync(() =>
+        Jobs.EnqueueAsync(JobTypes.RedetectSprites, "Re-detect sprite sheets and pixel art", new AssetsPayload(null)),
+        "Re-detecting sprite sheets and pixel art; follow it on the Jobs page.");
 
     private Task RegenerateAsync() => Ui.RunAsync(() =>
         Jobs.EnqueueAsync(JobTypes.RegeneratePreviews, "Regenerate outdated previews", new AssetsPayload(null)));

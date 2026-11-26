@@ -13,6 +13,10 @@ public static class CoreServiceCollectionExtensions
         services.TryAddSingleton(_ => AppPaths.Location);
         services.TryAddSingleton<AppStartup>();
         services.TryAddSingleton<Platform.FileDropBroker>();
+        services.TryAddSingleton<Platform.DragOutState>();
+        services.TryAddSingleton(sp => new Updates.UpdateChecker(sp.GetRequiredService<IAppSettingsStore>(),
+            logger: sp.GetService<Microsoft.Extensions.Logging.ILogger<Updates.UpdateChecker>>()));
+        services.AddSingleton<IStartupTask, Updates.UpdateStartupTask>();
         return services;
     }
 }

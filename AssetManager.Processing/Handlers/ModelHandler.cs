@@ -31,6 +31,7 @@ public sealed class ModelHandler(IModelRenderer? renderer = null) : AssetTypeHan
             {
                 MissingTextures = missing,
                 ProbeRanking = OrientationProbe.Rank(model.Scene).ToList(),
+                TextureSuggestions = item.Asset.Model?.TextureSuggestions ?? [],
             };
             item.Asset.Model = meta;
             item.Asset.ScaleAnomaly = meta.Transform.Anomaly;
@@ -100,6 +101,9 @@ public sealed class ModelHandler(IModelRenderer? renderer = null) : AssetTypeHan
     }
 
     private static readonly string[] ImageExtensions = [".png", ".jpg", ".jpeg", ".tga", ".psd", ".tif", ".tiff", ".bmp", ".dds", ".webp", ".exr"];
+
+    /// <summary>Whether a file extension (with the dot) is an image a texture can be read from.</summary>
+    internal static bool IsTextureExtension(string extension) => ImageExtensions.Contains(extension.ToLowerInvariant());
 
     private static readonly (TextureType Type, string Slot)[] Slots =
     [
@@ -177,7 +181,8 @@ public sealed class ModelHandler(IModelRenderer? renderer = null) : AssetTypeHan
 
         // Companions claimed by name only (no material reference in the file): apply a base-color texture
         // to every material that has none.
-        var fallback = item.Companions.Where(c => c.Material is null && c.Slot is null or "map").Select(c => c.LocalPath).FirstOrDefault();
+        var fallback = item.Companions.Where(c => c.Material is null && c.Slot is null or "map" && IsTextureExtension(c.File.Extension is { Length: > 0 } e ? e : Path.GetExtension(c.LocalPath)))
+            .Select(c => c.LocalPath).FirstOrDefault();
         if (fallback is not null)
             foreach (var material in scene.Materials)
                 if (!textures.Any(t => t.Material == (material.Name ?? "") && t.Slot == "map"))
@@ -199,7 +204,7 @@ public sealed class ModelHandler(IModelRenderer? renderer = null) : AssetTypeHan
     }
 
     /// <summary>PNG/JPEG within the size limit pass through; everything else (TGA, PSD, DDS…) becomes PNG.</summary>
-    private static (string Mime, byte[] Bytes) ForBrowser(byte[] bytes)
+    internal static (string Mime, byte[] Bytes) ForBrowser(byte[] bytes)
     {
         var isPng = bytes.Length > 4 && bytes[0] == 0x89 && bytes[1] == 0x50;
         var isJpeg = bytes.Length > 3 && bytes[0] == 0xFF && bytes[1] == 0xD8;

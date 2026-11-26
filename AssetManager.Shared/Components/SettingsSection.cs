@@ -20,8 +20,10 @@ public sealed record SettingsSection(string Id, string Title, IReadOnlyList<stri
     [
         new("appearance", AppearanceSettings.Title, AppearanceSettings.SearchTerms, typeof(AppearanceSettings)),
         new("catalog", CatalogSettings.Title, CatalogSettings.SearchTerms, typeof(CatalogSettings)),
+        new("backups", BackupSettings.Title, BackupSettings.SearchTerms, typeof(BackupSettings)),
         new("ai-model", AiModelSettings.Title, AiModelSettings.SearchTerms, typeof(AiModelSettings)),
         new("import", ImportSettings.Title, ImportSettings.SearchTerms, typeof(ImportSettings)),
+        new("library", LibrarySettings.Title, LibrarySettings.SearchTerms, typeof(LibrarySettings)),
         new("previews", PreviewSettingsForm.Title, PreviewSettingsForm.SearchTerms, typeof(PreviewSettingsForm)),
         new("maintenance", MaintenanceSettings.Title, MaintenanceSettings.SearchTerms, typeof(MaintenanceSettings)),
         new("about", AboutSettings.Title, AboutSettings.SearchTerms, typeof(AboutSettings)),

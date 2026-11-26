@@ -75,6 +75,25 @@ public sealed class EnrichAssetsJob(ImportEnricher enricher) : IJobHandler
     }
 }
 
+public sealed record SourcesPayload(long[] SourceIds);
+
+/// <summary>"Suggest source tags" (<see cref="JobType"/>): the AI tag consensus step for chosen sources (spec "When consensus runs").</summary>
+public sealed class ConsensusJob(ImportEnricher enricher) : IJobHandler
+{
+    public const string JobType = "ai.consensus";
+
+    public string Type => JobType;
+
+    public JobPool Pool => JobPool.Ai;
+
+    public async Task RunAsync(JobContext context, CancellationToken ct)
+    {
+        var ids = context.Payload<SourcesPayload>().SourceIds.Where(id => context.Includes($"source:{id}")).ToList();
+        await enricher.ConsensusForSourcesAsync(ids, context.Progress, ct);
+        context.Progress.SetSummary(new { sources = ids.Count });
+    }
+}
+
 /// <summary>Starts and cancels imports; what the import wizard calls.</summary>
 public sealed class ImportService(CatalogStore catalog, ImportStager stager, IJobQueue jobs)
 {

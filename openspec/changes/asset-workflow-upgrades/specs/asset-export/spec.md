@@ -22,7 +22,7 @@ When extracting assets that come from a Unity package or a Unity project folder,
 - **THEN** each texture is written with its original `.meta`, and Unity keeps their GUIDs and import settings
 
 ### Requirement: Referenced files in Unity export
-With "include referenced files", a Unity project export SHALL add the files that the exported assets reference by GUID from the same source, following references across files. This covers materials and their textures, and the meshes and materials of prefabs.
+With "include referenced files", a Unity project export SHALL add the files that the exported assets reference by GUID from the same source, following references across files. This covers materials and their textures, and the meshes and materials of prefabs. Unity prefabs (`.prefab`) SHALL be cataloged as assets of a new type, Prefab (no preview), so they can be selected and exported. Other Unity YAML files (`.asset`, `.controller`, `.overrideController`, `.anim`) stay noted rather than imported, but SHALL still be written when an exported asset references them, read from the source package or folder.
 
 #### Scenario: Prefab with dependencies
 - **WHEN** the user exports a prefab from a `.unitypackage` with "include referenced files"

@@ -1,0 +1,26 @@
+@using AssetManager.Shared.Services
+
+@* The "?" list of Browse keyboard shortcuts, rendered from the same table the key handler uses. *@
+<MudDialog>
+    <DialogContent>
+        <MudSimpleTable Dense="true" Elevation="0" id="shortcut-list">
+            <tbody>
+                @foreach (var s in BrowseShortcuts.All)
+                {
+                    <tr>
+                        <td style="white-space: nowrap"><kbd class="shortcut-key">@s.Label</kbd></td>
+                        <td><MudText Typo="Typo.body2">@s.Description</MudText></td>
+                    </tr>
+                }
+            </tbody>
+        </MudSimpleTable>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary mt-2" HtmlTag="div">Shortcuts do not apply while you type in a text field.</MudText>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="() => Dialog.Close()">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = null!;
+}

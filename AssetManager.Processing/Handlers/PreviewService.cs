@@ -84,6 +84,29 @@ public sealed class PreviewService(
     public sealed record ProcessOutcome(bool Processed, SkippedAsset? Skipped, string? Name, string? PreviewError);
 
     /// <summary>
+    /// The "pixel art" tag with origin AI follows the measurement (design D4): added for detected pixel art unless the user
+    /// edited the style, and an AI-origin copy removed when the image measures as not pixel art.
+    /// </summary>
+    internal static async Task MarkPixelArtAsync(CatalogDbContext db, Asset asset, CancellationToken ct)
+    {
+        if (!PixelArtRules.Measured(asset)) return;
+        if (asset.Image!.IsPixelArt)
+        {
+            if (asset.UserEdited.HasFlag(EditedFields.Style)) return;
+            var tag = (await AssetManager.Data.Services.TagService.GetOrCreateAsync(db, [PixelArtRules.Name], ct)).Single();
+            await db.SaveChangesAsync(ct);
+            // Not on an asset the user took the tag off (per-asset opt-out, spec "Opt-out survives re-import").
+            await db.Database.ExecuteSqlRawAsync("""
+                INSERT OR IGNORE INTO AssetTags (AssetId, TagId, Origin) SELECT {0}, {1}, {2}
+                WHERE NOT EXISTS (SELECT 1 FROM AssetTagOptOuts WHERE AssetId = {0} AND TagId = {1})
+                """, [asset.Id, tag.Id, nameof(TagOrigin.AI)], ct);
+        }
+        else
+            await db.AssetTags.Where(t => t.AssetId == asset.Id && t.Origin == TagOrigin.AI && t.Tag.Name == PixelArtRules.Name).ExecuteDeleteAsync(ct);
+        await AssetManager.Data.Search.SearchIndexer.RefreshAsync(db, [asset.Id], ct);
+    }
+
+    /// <summary>
     /// Reads one asset's files (live, from a container or a stored copy), extracts metadata, renders previews and
     /// saves both in one transaction. Works for staged and committed assets. Does not raise catalog change events.
     /// </summary>
@@ -120,6 +143,7 @@ public sealed class PreviewService(
             await using var tx = await db.Database.BeginTransactionAsync(ct);
             await db.SaveChangesAsync(ct);
             await AssetProcessor.SavePreviewsAsync(db, id, previews, options.Version(), ct);
+            await MarkPixelArtAsync(db, asset, ct);
             await tx.CommitAsync(ct);
             return new ProcessOutcome(true, null, asset.Name, asset.PreviewError);
         }

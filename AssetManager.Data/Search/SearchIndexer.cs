@@ -24,6 +24,7 @@ public static partial class SearchIndexer
                     a.Id,
                     a.Name,
                     a.Description,
+                    a.Notes,
                     Source = a.Source.DisplayName,
                     Files = a.Files.Select(f => new { f.FileName, f.RelativePath }).ToList(),
                     Tags = a.Tags.Select(t => t.Tag.Name).ToList(),
@@ -45,7 +46,7 @@ public static partial class SearchIndexer
                 }
                 await using var ins = conn.CreateCommand();
                 ins.Transaction = (SqliteTransaction)tx;
-                ins.CommandText = "INSERT INTO asset_fts(rowid, name, files, paths, description, tags, source) VALUES ($id, $name, $files, $paths, $desc, $tags, $source)";
+                ins.CommandText = "INSERT INTO asset_fts(rowid, name, files, paths, description, tags, source, notes) VALUES ($id, $name, $files, $paths, $desc, $tags, $source, $notes)";
                 var pId = ins.Parameters.Add("$id", SqliteType.Integer);
                 var pName = ins.Parameters.Add("$name", SqliteType.Text);
                 var pFiles = ins.Parameters.Add("$files", SqliteType.Text);
@@ -53,6 +54,7 @@ public static partial class SearchIndexer
                 var pDesc = ins.Parameters.Add("$desc", SqliteType.Text);
                 var pTags = ins.Parameters.Add("$tags", SqliteType.Text);
                 var pSource = ins.Parameters.Add("$source", SqliteType.Text);
+                var pNotes = ins.Parameters.Add("$notes", SqliteType.Text);
                 foreach (var r in rows)
                 {
                     pId.Value = r.Id;
@@ -62,6 +64,7 @@ public static partial class SearchIndexer
                     pDesc.Value = r.Description ?? "";
                     pTags.Value = string.Join(" ; ", r.Tags);
                     pSource.Value = WithWords(r.Source);
+                    pNotes.Value = r.Notes ?? "";
                     await ins.ExecuteNonQueryAsync(ct);
                 }
                 if (outer is null)

@@ -85,6 +85,7 @@
         </MudStack>
     }
 </MudPaper>
+<div class="mt-4"><AiTaggingSettings /></div>
 
 @code {
     public const string Title = "AI model";
@@ -93,7 +94,7 @@
     public static readonly string[] SearchTerms =
     [
         Title, "Chat model (GGUF)", "Vision projector (mmproj GGUF)", "Embedding model (GGUF)", "Acceleration",
-        "Auto (GPU, else CPU)", "GPU (Vulkan)", "CPU", "Requests at once", "Recommended models",
+        "Auto (GPU, else CPU)", "GPU (Vulkan)", "CPU", "Requests at once", "Recommended models", .. AiTaggingSettings.SearchTerms,
     ];
 
     private sealed record Field(ModelRole Role, string Id, string Label, string? Value, string Helper);

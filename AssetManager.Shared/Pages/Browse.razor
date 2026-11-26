@@ -13,6 +13,12 @@
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @inject ISnackbar Snackbar
+@inject IDialogService Dialogs
+@inject AssetManager.Data.Services.MetadataEditService Edits
+@inject ImageQueryService Images
+@inject AssetManager.Core.Platform.IDragOutService DragOut
+@inject AssetManager.Core.Platform.DragOutState DragOutState
+@inject ImageQueryCache ImageQueries
 
 <PageTitle>Browse</PageTitle>
 
@@ -33,6 +39,35 @@
         {
             <MudChip T="string" Color="Color.Info" OnClose="_ => SetQuery(_query with { SimilarTo = null })" id="similar-chip">Similar to @_similarName</MudChip>
         }
+        @if (_query.ImageQueryId is not null)
+        {
+            @if (_image is { } image)
+            {
+                <MudChip T="string" Color="Color.Info" OnClose="_ => SetQuery(_query with { ImageQueryId = null })" id="image-query-chip" title="@image.Description">
+                    <img src="@image.ThumbnailDataUrl" alt="query image" class="image-query-thumb" /> Like this image
+                </MudChip>
+            }
+            else
+            {
+                <MudChip T="string" Color="Color.Warning" OnClose="_ => SetQuery(_query with { ImageQueryId = null })" id="image-query-expired"
+                         title="Query images are kept in memory only">Query image expired: drop it again</MudChip>
+            }
+        }
+        @* Search by image (design D6): drop or paste an image here; drops elsewhere still import. *@
+        <div @ref="_imageZone" class="image-drop-zone mt-1 @(Images.IsAvailable ? "" : "image-drop-disabled")" id="image-drop-zone">
+            @if (_imageBusy)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" /> <span>Describing the image…</span>
+            }
+            else if (!Images.IsAvailable)
+            {
+                <span id="image-search-unavailable">Search by image needs the AI model with vision and the embedding model (Settings → AI model).</span>
+            }
+            else
+            {
+                <MudIcon Icon="@Icons.Material.Filled.ImageSearch" Size="Size.Small" /> <span>Drop or paste an image to find similar assets</span>
+            }
+        </div>
 
         <MudText Typo="Typo.subtitle2" Class="mt-3">Type</MudText>
         <div style="display: flex; flex-wrap: wrap; gap: 2px" id="type-filter">
@@ -102,11 +137,30 @@
             }
         </MudSelect>
 
+        <MudText Typo="Typo.subtitle2" Class="mt-3">Yours</MudText>
+        <MudCheckBox T="bool" Value="_query.FavoritesOnly" ValueChanged="v => SetQuery(_query with { FavoritesOnly = v })" Label="Favourites only" Dense="true"
+                     Size="Size.Small" id="favorites-filter" />
+        <MudSelect T="int" Label="Minimum rating" Value="_query.MinRating" ValueChanged="v => SetQuery(_query with { MinRating = v })" Margin="Margin.Dense"
+                   Dense="true" id="rating-filter">
+            <MudSelectItem T="int" Value="0">Any</MudSelectItem>
+            @for (var stars = 1; stars <= 5; stars++)
+            {
+                var n = stars;
+                <MudSelectItem T="int" Value="n">@(new string('★', n))@(n < 5 ? " or more" : "")</MudSelectItem>
+            }
+        </MudSelect>
+        <MudCheckBox T="bool" Value="_query.HasNotes" ValueChanged="v => SetQuery(_query with { HasNotes = v })" Label="Has notes" Dense="true"
+                     Size="Size.Small" id="notes-filter" />
+
         <MudText Typo="Typo.subtitle2" Class="mt-3">Model issues</MudText>
         <MudCheckBox T="bool" Value="_query.ScaleAnomaly" ValueChanged="v => SetQuery(_query with { ScaleAnomaly = v })" Label="Scale anomaly" Dense="true" Size="Size.Small" />
         <MudCheckBox T="bool" Value="_query.OrientationUncertain" ValueChanged="v => SetQuery(_query with { OrientationUncertain = v })" Label="Orientation uncertain" Dense="true" Size="Size.Small" />
+        <MudCheckBox T="bool" Value="_query.GridUncertain" ValueChanged="v => SetQuery(_query with { GridUncertain = v })" Label="Sprite grid uncertain" Dense="true" Size="Size.Small"
+                     id="grid-uncertain-filter" title="Images that look like several sprites but have no certain grid: check them in the details" />
         <MudCheckBox T="bool" Value="_query.OrientationNotVerified" ValueChanged="v => SetQuery(_query with { OrientationNotVerified = v })" Label="Orientation not verified" Dense="true" Size="Size.Small" />
         <MudCheckBox T="bool" Value="_query.TexturesMissing" ValueChanged="v => SetQuery(_query with { TexturesMissing = v })" Label="Textures missing" Dense="true" Size="Size.Small" />
+        <MudCheckBox T="bool" Value="_query.TexturesMatchedByAi" ValueChanged="v => SetQuery(_query with { TexturesMatchedByAi = v })" Label="Textures matched by AI"
+                     Dense="true" Size="Size.Small" id="filter-textures-ai" />
 
         <MudSelect T="SearchSort" Label="Sort" Value="_query.Sort" ValueChanged="v => SetQuery(_query with { Sort = v })" Margin="Margin.Dense" Dense="true" Class="mt-2" id="sort">
             <MudSelectItem T="SearchSort" Value="SearchSort.Relevance">Relevance</MudSelectItem>
@@ -123,9 +177,11 @@
             @if (_selected.Count > 0)
             {
                 <MudChip T="string" Color="Color.Primary" id="selected-count" OnClose="_ => ClearSelection()">@_selected.Count.ToString("N0") selected</MudChip>
-                <BulkActionBar Selection="_selected" OnDeleted="ClearSelection" />
+                <BulkActionBar @ref="_bulk" Selection="_selected" OnDeleted="ClearSelection" />
             }
             <MudSpacer />
+            <CreditsMenu Ids="ResultIdsAsync" Title="@(_query.Text is { Length: > 0 } text ? $"search {text}" : "search results")" Id="browse-credits"
+                         Disabled="_total is null or 0" />
             <MudButton Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.SelectAll" OnClick="SelectAllAsync"
                        Disabled="_total is null or 0" id="select-all">Select all</MudButton>
         </MudStack>
@@ -133,8 +189,7 @@
         {
             <MudAlert Severity="Severity.Warning" Class="mb-2" id="browse-error">@_error</MudAlert>
         }
-        <div @ref="_grid" class="browse-grid" tabindex="0" @onkeydown="OnKeyDown"
-             style="outline: none" id="browse-grid">
+        <div @ref="_grid" class="browse-grid" tabindex="0" style="outline: none" id="browse-grid">
             <Virtualize @ref="_virtualize" TItem="Row" ItemsProvider="LoadRowsAsync" ItemSize="RowHeight" OverscanCount="3" Context="row">
                 <ItemContent>
                     <div class="browse-row" style="height: @(RowHeight)px">
@@ -142,9 +197,11 @@
                         {
                             var index = row.Start + i;
                             var a = row.Items[i];
-                            <AssetCard @key="a.Id" AssetId="a.Id" Name="@a.Name" Type="a.Type" PreviewUrl="Previews.ThumbnailAsync" ModelViews="Previews.ModelViewsAsync" PreviewVersion="_previewVersion"
+                            <AssetCard @key="a.Id" AssetId="a.Id" Name="@a.Name" Type="a.Type" PreviewUrl="Previews.ThumbnailAsync" ModelViews="Previews.ModelViewsAsync" PreviewVersion="_previewVersion" Favorite="a.Favorite" Rating="a.Rating"
+                                       Focused="index == _focus" Spin="_spin == a.Id"
                                        Selectable="true" Selected="_selected.Contains(a.Id)" SelectedChanged="v => Toggle(a.Id, index, v)"
-                                       OnClick="e => OnCardClickAsync(e, a.Id, index)" OnOpen="OpenAsync" Badges="Badges(a)" Overlay="Overlay(a)" />
+                                       OnClick="e => OnCardClickAsync(e, a.Id, index)" OnOpen="OpenAsync" Badges="Badges(a)" Overlay="Overlay(a)"
+                                       OnContextMenu="e => ShowMenuAsync(a, e.ClientX, e.ClientY)" />
                         }
                     </div>
                 </ItemContent>
@@ -166,6 +223,9 @@
     </div>
 </div>
 
+<AssetContextMenu @ref="_menu" SemanticAvailable="Search.SemanticAvailable" OnOpenDetails="OpenAsync"
+                  OnFindSimilar="id => SetQuery(new SearchQuery { SimilarTo = id })" />
+
 @code {
     /// <summary>Card height plus the row gap; Virtualize needs a fixed row size.</summary>
     public const int RowHeight = 220;
@@ -180,6 +240,10 @@
     private int _columns = 4;
     private string? _error;
     private string? _similarName;
+    private ImageQuery? _image;
+    private bool _imageBusy;
+    private ElementReference _imageZone;
+    private IJSObjectReference? _drop;
     private readonly HashSet<long> _selected = [];
     private int? _anchor;
     private long? _playing;
@@ -198,6 +262,7 @@
     protected override async Task OnInitializedAsync()
     {
         Catalog.ContentChanged += OnCatalogChanged;
+        DragOutState.Selection = _selected; // a drag of a selected card carries the whole selection
         await LoadFilterOptionsAsync();
     }
 
@@ -211,6 +276,7 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        _rendered?.TrySetResult();
         if (!firstRender) return;
         try
         {
@@ -218,7 +284,10 @@
             _module = await JS.InvokeAsync<IJSObjectReference>("import", "./_content/AssetManager.Shared/js/browse.js");
             var columns = await _module.InvokeAsync<int>("observeWidth", _grid, _self, CardWidth, Gap);
             if (columns > 0) await ColumnsChanged(columns);
-            await _module.InvokeVoidAsync("watchSelectAll", _self);
+            await _module.InvokeVoidAsync("watchKeys", _self, BrowseShortcuts.Keys);
+            if (DragOut.IsSupported) await _module.InvokeAsync<bool>("installDragOut");
+            _drop = await JS.InvokeAsync<IJSObjectReference>("import", "./_content/AssetManager.Shared/js/fileDrop.js");
+            await _drop.InvokeVoidAsync("registerImageZone", _imageZone, _self);
         }
         catch (JSException) { }
         catch (InvalidOperationException) { } // prerendering / no JS
@@ -266,8 +335,12 @@
     {
         _selected.Clear();
         _anchor = null;
+        _focus = null;
+        _focusId = null;
+        _spin = null;
         _total = null;
         _similarName = null;
+        _image = _query.ImageQueryId is { } imageId ? ImageQueries.Get(imageId) : null;
         if (_query.SimilarTo is { } similar)
             _similarName = await NameOfAsync(similar) ?? $"#{similar}";
         await RefreshAsync();
@@ -278,6 +351,37 @@
         await using var db = Catalog.CreateDbContext();
         return await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.FirstOrDefaultAsync(db.Assets.Where(a => a.Id == id).Select(a => a.Name));
     }
+
+    /// <summary>An image dropped on the zone or pasted (base64): describe it once and search by it.</summary>
+    [JSInvokable]
+    public Task OnImageDropped(string base64) => InvokeAsync(async () =>
+    {
+        if (!Images.IsAvailable)
+        {
+            Snackbar.Add("Search by image needs the AI model with vision and the embedding model (Settings → AI model).", Severity.Warning);
+            return;
+        }
+        _imageBusy = true;
+        StateHasChanged();
+        try
+        {
+            var query = await Images.CreateAsync(Convert.FromBase64String(base64));
+            await SetQuery(_query with { ImageQueryId = query.Id, SimilarTo = null });
+        }
+        catch (Exception e) when (e is InvalidOperationException or FormatException or ImageMagick.MagickException or HttpRequestException
+                                       or AiOutputException)
+        {
+            Snackbar.Add($"Could not search by this image: {e.Message}", Severity.Error);
+        }
+        finally
+        {
+            _imageBusy = false;
+            StateHasChanged();
+        }
+    });
+
+    [JSInvokable]
+    public Task ImageRejected(string reason) => InvokeAsync(() => Snackbar.Add(reason, Severity.Warning));
 
     /// <summary>Changes the filters; the URL follows so a search can be bookmarked and Back works.</summary>
     private async Task SetQuery(SearchQuery query)
@@ -334,6 +438,7 @@
 
     private async Task OnCardClickAsync(MouseEventArgs e, long id, int index)
     {
+        (_focus, _focusId) = (index, id);
         if (e.ShiftKey && _anchor is { } anchor)
         {
             var from = Math.Min(anchor, index);
@@ -361,6 +466,10 @@
         _anchor = index;
     }
 
+    /// <summary>Every asset of the current results (for the credits report).</summary>
+    private async Task<IReadOnlyCollection<long>> ResultIdsAsync() =>
+        CatalogSearch.IsSemantic(_query) ? (await IdsAsync(0, _total ?? int.MaxValue)).ToList() : await Words.MatchingIdsAsync(_query);
+
     private async Task SelectAllAsync()
     {
         _selected.UnionWith(CatalogSearch.IsSemantic(_query) ? await IdsAsync(0, _total ?? int.MaxValue) : await Words.MatchingIdsAsync(_query));
@@ -374,21 +483,152 @@
 
     private async Task<IEnumerable<long>> IdsAsync(int skip, int take) => (await Search.SearchAsync(_query, skip, take)).Items.Select(i => i.Id);
 
-    private void OnKeyDown(KeyboardEventArgs e)
-    {
-        if (e.Key == "Escape") ClearSelection();
-    }
-
     /// <summary>
     /// Ctrl+A anywhere on the page selects every matching asset instead of the page's text (browse.js decides: not in
     /// a text field, and not while the details panel or a dialog is open, where Ctrl+A keeps selecting text).
     /// </summary>
     [JSInvokable]
-    public Task SelectAllFromKeyboard() => InvokeAsync(async () =>
+    public Task SelectAllFromKeyboard() => OnShortcut("Control+a");
+
+    // ---- keyboard (spec "Keyboard navigation", "Action shortcuts", design D10) ----
+
+    private int? _focus;
+    private long? _focusId;
+    private long? _spin;
+    private BulkActionBar? _bulk;
+    private TaskCompletionSource? _rendered;
+
+    /// <summary>The keyboard-focused card's position in the results, if any.</summary>
+    public int? FocusIndex => _focus;
+
+    /// <summary>A key combination from <see cref="BrowseShortcuts"/>, reported by browse.js (never while typing in a field).</summary>
+    [JSInvokable]
+    public Task OnShortcut(string key) => InvokeAsync(async () =>
     {
-        await SelectAllAsync();
+        switch (key)
+        {
+            case "ArrowLeft": await MoveAsync(-1, 0, false); break;
+            case "ArrowRight": await MoveAsync(1, 0, false); break;
+            case "ArrowUp": await MoveAsync(0, -1, false); break;
+            case "ArrowDown": await MoveAsync(0, 1, false); break;
+            case "Shift+ArrowLeft": await MoveAsync(-1, 0, true); break;
+            case "Shift+ArrowRight": await MoveAsync(1, 0, true); break;
+            case "Shift+ArrowUp": await MoveAsync(0, -1, true); break;
+            case "Shift+ArrowDown": await MoveAsync(0, 1, true); break;
+            case "Control+a": await SelectAllAsync(); break;
+            case "Enter":
+                if (_focusId is { } open) _details = open;
+                break;
+            case "Escape":
+                _spin = null;
+                if (_details is not null) _details = null;
+                else ClearSelection();
+                break;
+            case " ": await SpaceAsync(); break;
+            case "/":
+                if (_module is not null) await _module.InvokeVoidAsync("focusSearch");
+                break;
+            case "f": await ToggleFavoriteAsync(); break;
+            case "0" or "1" or "2" or "3" or "4" or "5": await RateAsync(key[0] - '0'); break;
+            case "Delete": await DeleteFromKeyboardAsync(); break;
+            case "ContextMenu" or "Shift+F10": await ShowMenuForFocusAsync(); break;
+            case "?":
+                await Dialogs.ShowAsync<ShortcutsDialog>("Keyboard shortcuts",
+                    new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseOnEscapeKey = true, CloseButton = true });
+                break;
+            default: return;
+        }
         StateHasChanged();
     });
+
+    /// <summary>Arrows move the focus and select that card; with Shift the selection extends from the anchor.</summary>
+    private async Task MoveAsync(int dx, int dy, bool extend)
+    {
+        if (_total is not { } total || total == 0) return;
+        var current = _focus ?? -1;
+        int next;
+        if (current < 0) next = 0;
+        else if (dy != 0)
+        {
+            next = current + dy * _columns;
+            if (next < 0 || next >= total) return; // no row above or below
+        }
+        else next = Math.Clamp(current + dx, 0, total - 1);
+        _focus = next;
+        _focusId = (await IdsAsync(next, 1)).Select(id => (long?)id).FirstOrDefault();
+        if (extend)
+        {
+            var anchor = _anchor ?? (current >= 0 ? current : next);
+            _anchor = anchor;
+            var range = await IdsAsync(Math.Min(anchor, next), Math.Abs(next - anchor) + 1);
+            _selected.Clear();
+            _selected.UnionWith(range);
+        }
+        else
+        {
+            _selected.Clear();
+            if (_focusId is { } id) _selected.Add(id);
+            _anchor = next;
+        }
+        if (_module is not null)
+        {
+            try { await _module.InvokeVoidAsync("reveal", _grid, next / Math.Max(1, _columns), RowHeight, 56); }
+            catch (JSException) { }
+        }
+    }
+
+    /// <summary>F and 0-5 act on the selection, or on the focused card when nothing is selected.</summary>
+    private IReadOnlyCollection<long> Targets() => _selected.Count > 0 ? [.. _selected] : _focusId is { } id ? [id] : [];
+
+    private async Task ToggleFavoriteAsync()
+    {
+        var targets = Targets();
+        if (targets.Count == 0) return;
+        bool allFavorite;
+        await using (var db = Catalog.CreateDbContext())
+            allFavorite = !await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.AnyAsync(
+                db.Assets.Where(a => targets.Contains(a.Id) && !a.Favorite));
+        await Edits.SetFavoriteAsync(targets, !allFavorite);
+    }
+
+    private async Task RateAsync(int stars)
+    {
+        var targets = Targets();
+        if (targets.Count > 0) await Edits.SetRatingAsync(targets, stars);
+    }
+
+    private async Task SpaceAsync()
+    {
+        if (_focusId is not { } id) return;
+        var type = await TypeOfAsync(id);
+        if (type is AssetType.Audio or AssetType.Music) await TogglePlayAsync(id);
+        else if (type is AssetType.Model3D or AssetType.Animation) _spin = _spin == id ? null : id;
+    }
+
+    private async Task<AssetType?> TypeOfAsync(long id)
+    {
+        await using var db = Catalog.CreateDbContext();
+        return await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.FirstOrDefaultAsync(
+            db.Assets.Where(a => a.Id == id).Select(a => (AssetType?)a.Type));
+    }
+
+    /// <summary>Delete starts the bulk delete with its confirmation (the focused card when nothing is selected).</summary>
+    private async Task DeleteFromKeyboardAsync()
+    {
+        if (_selected.Count == 0)
+        {
+            if (_focusId is not { } id) return;
+            _selected.Add(id);
+        }
+        if (_bulk is null)
+        {
+            _rendered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            StateHasChanged();
+            try { await _rendered.Task.WaitAsync(TimeSpan.FromSeconds(2)); }
+            catch (TimeoutException) { }
+        }
+        if (_bulk is not null) await _bulk.DeleteAsync();
+    }
 
     // ---- card extras ----
 
@@ -419,24 +659,43 @@
         a.TexturesMissing ? "Textures missing" : null,
     }.OfType<string>());
 
+    /// <summary>Over the preview: only the play button of sounds ("find similar" is in the context menu, design D17).</summary>
     private RenderFragment? Overlay(AssetSummary a)
     {
-        var audio = a.Type is AssetType.Audio or AssetType.Music;
-        var similar = a.AiStatus == AiStatus.Enriched;
-        if (!audio && !similar) return null;
+        if (a.Type is not (AssetType.Audio or AssetType.Music)) return null;
         return __builder =>
         {
-            if (similar)
-            {
-                <MudIconButton Icon="@Icons.Material.Filled.ImageSearch" Size="Size.Small" title="Find similar" Class="find-similar"
-                               OnClick="() => SetQuery(new SearchQuery { SimilarTo = a.Id })" />
-            }
-            if (audio)
-            {
-                <MudIconButton Icon="@(_playing == a.Id ? Icons.Material.Filled.Stop : Icons.Material.Filled.PlayArrow)" Size="Size.Small"
-                               title="@(_playing == a.Id ? "Stop" : "Play")" Class="play-audio" Color="Color.Primary" OnClick="() => TogglePlayAsync(a.Id)" />
-            }
+            <MudIconButton Icon="@(_playing == a.Id ? Icons.Material.Filled.Stop : Icons.Material.Filled.PlayArrow)" Size="Size.Small"
+                           title="@(_playing == a.Id ? "Stop" : "Play")" Class="play-audio" Color="Color.Primary" OnClick="() => TogglePlayAsync(a.Id)" />
         };
+    }
+
+    // ---- card context menu (spec "Asset card context menu", design D17) ----
+
+    private AssetContextMenu? _menu;
+
+    /// <summary>The open context menu (for tests).</summary>
+    public AssetContextMenu? Menu => _menu;
+
+    private Task ShowMenuAsync(AssetSummary a, double x, double y) =>
+        _menu?.ShowAsync(new AssetContextMenu.Target(a.Id, a.Name, a.AiStatus == AiStatus.Enriched), x, y) ?? Task.CompletedTask;
+
+    /// <summary>The menu key or Shift+F10: the focused card's menu, at the card.</summary>
+    private async Task ShowMenuForFocusAsync()
+    {
+        if (_focusId is not { } id || _menu is null) return;
+        AssetContextMenu.Target? target;
+        await using (var db = Catalog.CreateDbContext())
+            target = await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.FirstOrDefaultAsync(
+                db.Assets.Where(a => a.Id == id).Select(a => new AssetContextMenu.Target(a.Id, a.Name, a.AiStatus == AiStatus.Enriched)));
+        if (target is null) return;
+        double[]? point = null;
+        if (_module is not null)
+        {
+            try { point = await _module.InvokeAsync<double[]?>("cardPoint", id); }
+            catch (JSException) { }
+        }
+        await _menu.ShowAsync(target, point?[0] ?? 200, point?[1] ?? 200);
     }
 
     private async Task TogglePlayAsync(long id)
@@ -477,7 +736,12 @@
             try
             {
                 await _module.InvokeVoidAsync("unobserve");
-                await _module.InvokeVoidAsync("unwatchSelectAll");
+                await _module.InvokeVoidAsync("unwatchKeys");
+                if (_drop is not null)
+                {
+                    await _drop.InvokeVoidAsync("unregisterImageZone");
+                    await _drop.DisposeAsync();
+                }
                 await _module.InvokeVoidAsync("stop");
                 await _module.DisposeAsync();
             }

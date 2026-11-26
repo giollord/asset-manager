@@ -56,6 +56,32 @@ public interface IVolumeService
 /// Files dropped onto the app window (design D9): the host forwards the real paths of a WebView2 drop here, and the
 /// import page takes them. Paths dropped while the import page is closed wait in <see cref="TakePending"/>.
 /// </summary>
+/// <summary>Dragging catalog files out of the app into Explorer or an engine (design D7); only the desktop host supports it.</summary>
+public interface IDragOutService
+{
+    bool IsSupported { get; }
+}
+
+/// <summary>
+/// Shared state of a drag-out (design D7): Browse publishes its selection (a drag of a selected card takes the whole
+/// selection); the host reports progress ("Preparing N files…") and problems, which the layout shows.
+/// </summary>
+public sealed class DragOutState
+{
+    /// <summary>The assets selected in Browse (live; read on the UI thread).</summary>
+    public IReadOnlyCollection<long> Selection { get; set; } = [];
+
+    /// <summary>Raised with a status text while files are prepared, and with null when done.</summary>
+    public event Action<string?>? StatusChanged;
+
+    /// <summary>Raised with a message for the user (e.g. unavailable assets).</summary>
+    public event Action<string>? Problem;
+
+    public void SetStatus(string? status) => StatusChanged?.Invoke(status);
+
+    public void Report(string message) => Problem?.Invoke(message);
+}
+
 public sealed class FileDropBroker
 {
     private readonly object _gate = new();

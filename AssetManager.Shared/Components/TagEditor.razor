@@ -1,10 +1,11 @@
 @using AssetManager.Core.Domain
 
-@* Tags of one or more assets. User tags are filled chips, import and AI tags outlined; all can be removed. *@
+@* Tags of one or more assets. User tags are filled chips, import, AI and source tags outlined (source tags with a pack icon); all can be removed. *@
 <div class="tag-editor">
     @foreach (var tag in Tags)
     {
-        <MudChip T="string" Size="Size.Small" Text="@tag.Name" Value="tag.Name" title="@OriginText(tag.Origin)"
+        <MudChip T="string" Size="Size.Small" Text="@tag.Name" Value="tag.Name" title="@OriginText(tag.Origin)" data-origin="@tag.Origin"
+                 Icon="@(tag.Origin == TagOrigin.Source ? Icons.Material.Outlined.Inventory2 : null)"
                  Variant="@(tag.Origin == TagOrigin.User ? Variant.Filled : Variant.Outlined)"
                  Color="@(tag.Origin == TagOrigin.AI ? Color.Info : tag.Origin == TagOrigin.User ? Color.Primary : Color.Default)"
                  OnClose="@(ReadOnly ? null : (MudChip<string> _) => OnRemove.InvokeAsync(tag.Name))" />
@@ -31,6 +32,7 @@
     {
         TagOrigin.User => "Added by you",
         TagOrigin.AI => "Suggested by the AI",
+        TagOrigin.Source => "From the source: every asset of the source carries it",
         _ => "From the import",
     };
 

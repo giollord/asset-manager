@@ -135,4 +135,127 @@ public class CompanionResolverTests
         Assert.Equal([("_BumpMap", new string('b', 32), "normalMap"), ("_MainTex", new string('a', 32), "map")], info.Textures);
         Assert.Null(UnityMaterial.Parse("\u0001binary", "x"));
     }
+    /// <summary>A box whose second half (a copy of the mesh) uses another material; neither references a texture.</summary>
+    private static Assimp.Scene TwoMaterials(string first, string second)
+    {
+        var scene = Box(new BoxOptions { Material = first });
+        scene.Materials.Add(new Assimp.Material { Name = second, ColorDiffuse = new System.Numerics.Vector4(0.8f, 0.8f, 0.8f, 1) });
+        var copy = new Assimp.Mesh("Leaves", Assimp.PrimitiveType.Triangle) { MaterialIndex = 1 };
+        copy.Vertices.AddRange(scene.Meshes[0].Vertices.Select(v => v + new System.Numerics.Vector3(0, 1, 0)));
+        copy.Faces.AddRange(scene.Meshes[0].Faces.Select(f => new Assimp.Face([.. f.Indices])));
+        copy.TextureCoordinateChannels[0].AddRange(scene.Meshes[0].TextureCoordinateChannels[0]);
+        copy.UVComponentCount[0] = 2;
+        scene.Meshes.Add(copy);
+        scene.RootNode.Children[0].MeshIndices.Add(1);
+        return scene;
+    }
+
+    /// <summary>Scenario "Prefixed names" (design D20 step 4).</summary>
+    [Fact]
+    public void Prefixed_names_attach_albedo_and_normal_map()
+    {
+        using var dir = FixtureBuilder.TempDir();
+        Write(dir, "Orc/Meshes/SK_Orc.fbx", Box(new BoxOptions { Material = "Orc" }), "fbx");
+        Png(dir, "Orc/Textures/T_Orc_Albedo.png");
+        Png(dir, "Orc/Textures/T_Orc_Normal.png");
+        Png(dir, "Orc/Textures/T_Goblin_Albedo.png");
+
+        var groups = new CompanionResolver().Group(
+        [
+            File(dir, "Orc/Meshes/SK_Orc.fbx"),
+            File(dir, "Orc/Textures/T_Orc_Albedo.png"),
+            File(dir, "Orc/Textures/T_Orc_Normal.png"),
+            File(dir, "Orc/Textures/T_Goblin_Albedo.png"),
+        ]);
+
+        var model = Assert.Single(groups, g => g.Primary.Class.Type == AssetType.Model3D);
+        Assert.Collection(model.Companions.OrderBy(c => c.File.FileName),
+            c => Assert.Equal(("T_Orc_Albedo.png", "Orc", "map", CompanionOrigin.NameMatch), (c.File.FileName, c.Material, c.Slot, c.Origin)),
+            c => Assert.Equal(("T_Orc_Normal.png", "Orc", "normalMap", CompanionOrigin.NameMatch), (c.File.FileName, c.Material, c.Slot, c.Origin)));
+        Assert.Single(groups, g => g.Primary.FileName == "T_Goblin_Albedo.png"); // unrelated texture stays its own asset
+    }
+
+    /// <summary>Scenario "Reference with another extension and folder".</summary>
+    [Fact]
+    public void Missing_reference_matches_the_same_name_in_another_format_and_folder()
+    {
+        using var dir = FixtureBuilder.TempDir();
+        Write(dir, "farm/Models/Buildings/House_1.fbx", Box(new BoxOptions { Material = "Material", DiffuseTexture = @"C:\Users\artist\Desktop\Color 2.jpg" }), "fbx");
+        Png(dir, "farm/Textures/Color 2.png");
+        Png(dir, "farm/Textures/Emission.png");
+
+        var groups = new CompanionResolver().Group(
+        [
+            File(dir, "farm/Models/Buildings/House_1.fbx"),
+            File(dir, "farm/Textures/Color 2.png"),
+            File(dir, "farm/Textures/Emission.png"),
+        ]);
+
+        var model = Assert.Single(groups, g => g.Primary.Class.Type == AssetType.Model3D);
+        var link = Assert.Single(model.Companions);
+        Assert.Equal(("Color 2.png", "Material", "map", CompanionOrigin.NameMatch), (link.File.FileName, link.Material, link.Slot, link.Origin));
+    }
+
+    /// <summary>The name-match half of scenario "Two materials": the leaves match by name, the bark is left for the AI.</summary>
+    [Fact]
+    public void Each_material_is_matched_on_its_own()
+    {
+        using var dir = FixtureBuilder.TempDir();
+        Write(dir, "Trees/FBX/Tree_3.fbx", TwoMaterials("Bark", "Tree_Leaves"), "fbx");
+        foreach (var t in new[] { "Textures/Tree_Leaves.png", "Textures/Tree_Bark.jpg", "Textures/Birch_Bark.png", "Textures/Color Variations/Bark_Dead.png" })
+            Png(dir, "Trees/" + t);
+
+        var groups = new CompanionResolver().Group(
+        [
+            File(dir, "Trees/FBX/Tree_3.fbx"),
+            File(dir, "Trees/Textures/Tree_Leaves.png"),
+            File(dir, "Trees/Textures/Tree_Bark.jpg"),
+            File(dir, "Trees/Textures/Birch_Bark.png"),
+            File(dir, "Trees/Textures/Color Variations/Bark_Dead.png"),
+        ]);
+
+        var model = Assert.Single(groups, g => g.Primary.Class.Type == AssetType.Model3D);
+        var link = Assert.Single(model.Companions);
+        Assert.Equal(("Tree_Leaves.png", "Tree_Leaves", "map", CompanionOrigin.NameMatch), (link.File.FileName, link.Material, link.Slot, link.Origin));
+        Assert.Equal(4, groups.Count); // the three bark textures stay assets: "Bark" matches none of them exactly
+    }
+
+    [Fact]
+    public void Ambiguous_names_attach_nothing()
+    {
+        using var dir = FixtureBuilder.TempDir();
+        Write(dir, "pack/Models/Rock.fbx", Box(new BoxOptions { Material = "Rock" }), "fbx");
+        Png(dir, "pack/Textures/Summer/T_Rock.png");
+        Png(dir, "pack/Textures/Winter/T_Rock.png");
+
+        var groups = new CompanionResolver().Group(
+        [
+            File(dir, "pack/Models/Rock.fbx"),
+            File(dir, "pack/Textures/Summer/T_Rock.png"),
+            File(dir, "pack/Textures/Winter/T_Rock.png"),
+        ]);
+
+        Assert.Empty(Assert.Single(groups, g => g.Primary.Class.Type == AssetType.Model3D).Companions);
+    }
+
+    [Theory]
+    [InlineData("SK_Orc", "orc")]
+    [InlineData("T_Orc_Albedo.png", "orc")]
+    [InlineData("T_Orc_Base_Color.tga", "orc")]
+    [InlineData(@"C:\Users\artist\Desktop\Color 2.jpg", "color2")]
+    [InlineData("LowPolyCity_Texture_Diff.png", "lowpolycity")]
+    [InlineData("Polygon_Texture_01_A.png", "polygontexture01a")]
+    [InlineData("Material.001", "material001")]
+    [InlineData("Normal.png", "normal")]
+    public void Texture_name_keys(string name, string key) => Assert.Equal(key, TextureNames.Key(name));
+
+    [Theory]
+    [InlineData("T_Orc_Albedo.png", TextureMapKind.BaseColor)]
+    [InlineData("Tree_Bark.jpg", TextureMapKind.BaseColor)]
+    [InlineData("T_Orc_Normal.png", TextureMapKind.Normal)]
+    [InlineData("Rock_N.png", TextureMapKind.Normal)]
+    [InlineData("Polygon_Legendary_Chest_Texture_01_Emission.png", TextureMapKind.Emissive)]
+    [InlineData("Rock_Roughness.png", TextureMapKind.Other)]
+    [InlineData("Rock_Ambient_Occlusion.png", TextureMapKind.Other)]
+    public void Texture_kinds(string name, TextureMapKind kind) => Assert.Equal(kind, TextureNames.KindOf(name));
 }

@@ -22,6 +22,19 @@ public sealed record SourceCount(long Id, string Name, SourceKind Kind, int Coun
 
 public sealed record TagCount(long Id, string Name, int Count, SearchQuery Query);
 
+/// <summary>A source with a license audit problem and how many of its assets have it.</summary>
+/// <param name="Query">Browse drill-down: the source (and its nested sources) with the problem.</param>
+public sealed record LicenseAuditSource(long SourceId, string Name, int Assets, SearchQuery Query);
+
+/// <summary>One license audit problem with its affected sources (spec "License audit").</summary>
+public sealed record LicenseAuditProblem(LicenseProblem Problem, IReadOnlyList<LicenseAuditSource> Sources)
+{
+    public string Label => Problem.Label();
+    public int SourceCount => Sources.Count;
+    public int AssetCount => Sources.Sum(s => s.Assets);
+    public SearchQuery Query => new() { LicenseProblem = Problem };
+}
+
 /// <summary>The dashboard's numbers (spec "Catalog overview dashboard", "Status breakdowns", "Collection, source and tag counts").</summary>
 public interface ICatalogStatsService
 {
@@ -33,6 +46,9 @@ public interface ICatalogStatsService
 
     /// <summary>Tags with their usage, most used first.</summary>
     Task<IReadOnlyList<TagCount>> TagsAsync(CancellationToken ct = default);
+
+    /// <summary>The four license problems, each with its sources (most affected assets first).</summary>
+    Task<IReadOnlyList<LicenseAuditProblem>> LicenseAuditAsync(CancellationToken ct = default);
 }
 
 /// <summary>
@@ -49,6 +65,7 @@ public sealed class CatalogStatsService : ICatalogStatsService
     private Task<IReadOnlyList<CollectionCount>>? _collections;
     private Task<IReadOnlyList<SourceCount>>? _sources;
     private Task<IReadOnlyList<TagCount>>? _tags;
+    private Task<IReadOnlyList<LicenseAuditProblem>>? _audit;
 
     public CatalogStatsService(CatalogStore catalog, AssetSearchService search)
     {
@@ -61,7 +78,7 @@ public sealed class CatalogStatsService : ICatalogStatsService
     /// <summary>Drops the cached numbers (the catalog raises this once per commit or bulk operation).</summary>
     public void Invalidate()
     {
-        lock (_gate) (_stats, _collections, _sources, _tags) = (null, null, null, null);
+        lock (_gate) (_stats, _collections, _sources, _tags, _audit) = (null, null, null, null, null);
     }
 
     public Task<CatalogStats> GetAsync(CancellationToken ct = default) => Cached(ref _stats, () => ComputeAsync(CancellationToken.None));
@@ -71,6 +88,27 @@ public sealed class CatalogStatsService : ICatalogStatsService
     public Task<IReadOnlyList<SourceCount>> SourcesAsync(CancellationToken ct = default) => Cached(ref _sources, () => ComputeSourcesAsync(CancellationToken.None));
 
     public Task<IReadOnlyList<TagCount>> TagsAsync(CancellationToken ct = default) => Cached(ref _tags, () => ComputeTagsAsync(CancellationToken.None));
+
+    public Task<IReadOnlyList<LicenseAuditProblem>> LicenseAuditAsync(CancellationToken ct = default) =>
+        Cached(ref _audit, () => ComputeAuditAsync(CancellationToken.None));
+
+    /// <summary>One grouped query per problem over the committed assets; works with every drive detached.</summary>
+    private async Task<IReadOnlyList<LicenseAuditProblem>> ComputeAuditAsync(CancellationToken ct)
+    {
+        await using var db = _catalog.CreateDbContext();
+        var names = await db.Sources.AsNoTracking().Select(s => new { s.Id, s.DisplayName }).ToDictionaryAsync(s => s.Id, s => s.DisplayName, ct);
+        var result = new List<LicenseAuditProblem>();
+        foreach (var problem in Enum.GetValues<LicenseProblem>())
+        {
+            var counts = await db.Assets.WhereLicenseProblem(problem).GroupBy(a => a.SourceId)
+                .Select(g => new { g.Key, Count = g.Count() }).ToListAsync(ct);
+            result.Add(new LicenseAuditProblem(problem, counts
+                .Select(c => new LicenseAuditSource(c.Key, names.GetValueOrDefault(c.Key) ?? $"#{c.Key}", c.Count,
+                    new SearchQuery { SourceId = c.Key, LicenseProblem = problem }))
+                .OrderByDescending(s => s.Assets).ThenBy(s => s.Name, StringComparer.OrdinalIgnoreCase).ToList()));
+        }
+        return result;
+    }
 
     private Task<T> Cached<T>(ref Task<T>? slot, Func<Task<T>> compute)
     {

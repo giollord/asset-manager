@@ -4,6 +4,7 @@ using AssetManager.Core.Domain;
 using AssetManager.Processing.Handlers;
 using AssetManager.Processing.Media;
 using AssetManager.Processing.Settings;
+using AssetManager.Processing.Sprites;
 using ImageMagick;
 using ImageMagick.Drawing;
 using Microsoft.Extensions.AI;
@@ -14,7 +15,8 @@ namespace AssetManager.AI.Enrichment;
 public sealed record ItemInput(Asset Asset, string Text, IReadOnlyList<PreviewBlob> Previews);
 
 /// <summary>Source context shared by the items of one pack.</summary>
-public sealed record ItemContext(string? PackName = null, string? PackDescription = null, string? Instruction = null);
+/// <param name="SuggestedTags">The catalog's suggested tag vocabulary (design D15); answers are folded onto it.</param>
+public sealed record ItemContext(string? PackName = null, string? PackDescription = null, string? Instruction = null, IReadOnlyList<string>? SuggestedTags = null);
 
 public enum ItemRequestKind { Sheet, Model, Audio }
 
@@ -26,7 +28,8 @@ public sealed record ItemRequest(ItemRequestKind Kind, IReadOnlyList<PlannedItem
 /// <summary>The validated answer for one asset, ready to apply.</summary>
 public sealed record ItemOutcome(Asset Asset, ItemResult Result, AiInputMode Mode)
 {
-    public IReadOnlyList<string> Tags => AiText.NormalizeTags(Result.Tags);
+    /// <summary>The AI tags, with "pixel art" following the measurement for images (design D4).</summary>
+    public IReadOnlyList<string> Tags => PixelArtRules.Tags(Asset, AiText.NormalizeTags(Result.Tags));
 }
 
 /// <summary>
@@ -92,6 +95,7 @@ public static class ItemPass
         if (!string.IsNullOrWhiteSpace(context.Instruction)) sb.AppendLine($"Instruction from the user (follow it): {context.Instruction.Trim()}");
         sb.AppendLine("Describe what each item actually shows or sounds like. Names and paths may be in any language: translate their meaning, answer in English.");
         sb.AppendLine("Tags are separate English words or short phrases about content, material, theme and use; never copy a file name into tags.");
+        if (context.SuggestedTags is { Count: > 0 } suggested) sb.AppendLine(SuggestedTags.PromptLine(suggested));
         sb.AppendLine("Type \"animation\" is a motion clip (e.g. a walk cycle or an attack), even when the file shows a stand-in character; describe the motion.");
         sb.AppendLine();
 
@@ -146,8 +150,15 @@ public static class ItemPass
         var prompt = await BuildPromptAsync(request, context, options, ct);
         var labels = request.Items.Select(i => i.Label).ToList();
         var batch = await chat.AskAsync<ItemBatchResult>(prompt, r => { r.Expected = labels; return []; }, ct);
-        return request.Items.Select(i => new ItemOutcome(i.Input.Asset, batch.Items.First(r => r.Index == i.Label), i.Mode)).ToList();
+        return request.Items.Select(i => new ItemOutcome(i.Input.Asset, Fold(batch.Items.First(r => r.Index == i.Label), context.SuggestedTags), i.Mode)).ToList();
     }
+
+    /// <summary>Folds near-synonyms in the answer's tags and style onto the suggested tags ("lowpoly" → "low poly").</summary>
+    public static ItemResult Fold(ItemResult result, IReadOnlyList<string>? suggested) => suggested is not { Count: > 0 } ? result : result with
+    {
+        Tags = SuggestedTags.Fold(AiText.NormalizeTags(result.Tags), suggested),
+        Style = SuggestedTags.Fold(AiText.NormalizeTags(result.Style), suggested),
+    };
 
     /// <summary>
     /// Writes the answer to the asset, leaving user-edited fields alone. The type only changes within its family
@@ -157,8 +168,11 @@ public static class ItemPass
     {
         var (asset, r, mode) = outcome;
         if (!asset.UserEdited.HasFlag(EditedFields.Description) && !string.IsNullOrWhiteSpace(r.Description)) asset.Description = r.Description.Trim();
-        if (!asset.UserEdited.HasFlag(EditedFields.Type) && CanRefine(asset.Type, r.Type)) asset.Type = r.Type;
-        if (!asset.UserEdited.HasFlag(EditedFields.Style)) asset.Style = AiText.NormalizeTags(r.Style);
+        // Sprite sheet or not is decided by slicing data and the grid detector; the AI's word is only a hint (design D3).
+        if (!asset.UserEdited.HasFlag(EditedFields.Type) && CanRefine(asset.Type, r.Type) && r.Type != AssetType.SpriteSheet && asset.Type != AssetType.SpriteSheet)
+            asset.Type = r.Type;
+        // "pixel art" in the style follows the measurement for images; the AI's pixel-art answer is only a hint (design D4).
+        if (!asset.UserEdited.HasFlag(EditedFields.Style)) asset.Style = PixelArtRules.Style(asset, AiText.NormalizeTags(r.Style));
         if (!asset.UserEdited.HasFlag(EditedFields.Colors) && asset.Colors.Count == 0)
             asset.Colors = r.Colors.Select(c => c.Trim().ToLowerInvariant()).Distinct().Take(4)
                 .Select(c => ColorNames.HexOf(c) is { } hex ? new ColorInfo(hex, c, 0) : null).OfType<ColorInfo>().ToList();
@@ -168,6 +182,14 @@ public static class ItemPass
         asset.AiError = null;
         asset.EmbeddingDirty = true;
     }
+
+    /// <summary>The AI's sprite-sheet answer as a detector hint; calling an image a sprite sheet counts as "likely".</summary>
+    public static SpriteSheetHint? SpriteHint(ItemResult r) =>
+        r.SpriteSheet is { Likely: true } s ? new SpriteSheetHint(true, Positive(s.Columns), Positive(s.Rows), Positive(s.Frames))
+        : r.Type == AssetType.SpriteSheet ? new SpriteSheetHint(true)
+        : null;
+
+    private static int? Positive(int? v) => v is > 0 and <= 1024 ? v : null;
 
     public static void MarkFailed(IEnumerable<Asset> assets, string error)
     {
@@ -180,7 +202,7 @@ public static class ItemPass
 
     public static bool CanRefine(AssetType from, AssetType to)
     {
-        if (from == to) return false;
+        if (from == to || from == AssetType.Prefab || to == AssetType.Prefab) return false; // a prefab is known by its extension
         if (from == AssetType.Other) return to is not (AssetType.Model3D or AssetType.Animation); // these need model metadata and renders
         if (from == AssetType.Model3D) return to == AssetType.Animation; // the file holds a clip; an animation never turns back into a model
         AssetType[][] families = [[AssetType.Image, AssetType.Texture, AssetType.SpriteSheet], [AssetType.Audio, AssetType.Music]];

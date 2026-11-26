@@ -1,0 +1,134 @@
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+
+@* The asset card context menu (spec "Asset card context menu", design D17). One instance on Browse: it opens at the
+   pointer, or at a card for the keyboard, acts on the asset it was opened for and never changes the selection. It
+   closes on Esc, a click outside it, scrolling and after an item is chosen. *@
+@if (_target is { } t)
+{
+    <div class="asset-menu-backdrop" style="position: fixed; inset: 0; z-index: 1400"
+         @onclick="Close" @oncontextmenu="Close" @oncontextmenu:preventDefault="true" @onwheel="Close"></div>
+    <MudPaper Elevation="8" Class="asset-menu py-1" id="asset-menu" role="menu" aria-label="@t.Name" @onkeydown="OnKeyDownAsync"
+              Style="@($"position: fixed; left: min({Px(_x)}, calc(100vw - 260px)); top: min({Px(_y)}, calc(100vh - 150px)); z-index: 1401; min-width: 240px")">
+        <button type="button" role="menuitem" class="asset-menu-item asset-menu-open" @onclick="OpenDetailsAsync">
+            <MudIcon Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small" />
+            <span>Open details</span>
+        </button>
+        <button type="button" role="menuitem" class="asset-menu-item asset-menu-similar" disabled="@(SimilarReason(t) is not null)"
+                aria-disabled="@(SimilarReason(t) is not null ? "true" : "false")" @onclick="FindSimilarAsync">
+            <MudIcon Icon="@Icons.Material.Filled.ImageSearch" Size="Size.Small" />
+            <span>
+                Find similar
+                @if (SimilarReason(t) is { } reason)
+                {
+                    <span class="asset-menu-reason mud-text-secondary">@reason</span>
+                }
+            </span>
+        </button>
+        <button type="button" role="menuitem" class="asset-menu-item asset-menu-copy" @onclick="CopyNameAsync">
+            <MudIcon Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" />
+            <span>Copy name</span>
+        </button>
+    </MudPaper>
+}
+
+@code {
+    /// <summary>The asset a menu is for.</summary>
+    public sealed record Target(long Id, string Name, bool Enriched);
+
+    [Parameter] public EventCallback<long> OnOpenDetails { get; set; }
+
+    [Parameter] public EventCallback<long> OnFindSimilar { get; set; }
+
+    /// <summary>Whether the embedding model is available for "find similar".</summary>
+    [Parameter] public bool SemanticAvailable { get; set; }
+
+    private Target? _target;
+    private double _x, _y;
+    private bool _focusFirst;
+    private IJSObjectReference? _module;
+
+    public bool IsOpen => _target is not null;
+
+    public long? AssetId => _target?.Id;
+
+    /// <summary>Opens the menu for <paramref name="target"/> with its top-left corner at the viewport point.</summary>
+    public Task ShowAsync(Target target, double x, double y) => InvokeAsync(() =>
+    {
+        (_target, _x, _y, _focusFirst) = (target, x, y, true);
+        StateHasChanged();
+    });
+
+    public void Close()
+    {
+        if (_target is null) return;
+        _target = null;
+        StateHasChanged();
+    }
+
+    /// <summary>Why "find similar" is unavailable for the asset, or null when it is available.</summary>
+    public string? SimilarReason(Target t) =>
+        !t.Enriched ? "Needs AI enrichment first" : !SemanticAvailable ? "Needs the embedding model" : null;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_focusFirst || _target is null) return;
+        _focusFirst = false;
+        try
+        {
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./_content/AssetManager.Shared/js/browse.js");
+            await _module.InvokeVoidAsync("focusMenu", 0);
+        }
+        catch (JSException) { }
+        catch (InvalidOperationException) { }
+    }
+
+    private async Task OnKeyDownAsync(KeyboardEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case "Escape" or "Tab":
+                Close();
+                if (_module is not null)
+                {
+                    try { await _module.InvokeVoidAsync("focusGrid"); } // keyboard navigation goes on from the card
+                    catch (JSException) { }
+                }
+                break;
+            case "ArrowDown" or "ArrowUp" when _module is not null:
+                try { await _module.InvokeVoidAsync("focusMenu", e.Key == "ArrowDown" ? 1 : -1); }
+                catch (JSException) { }
+                break;
+        }
+    }
+
+    private async Task OpenDetailsAsync()
+    {
+        var t = _target!;
+        Close();
+        await OnOpenDetails.InvokeAsync(t.Id);
+    }
+
+    private async Task FindSimilarAsync()
+    {
+        var t = _target!;
+        if (SimilarReason(t) is not null) return;
+        Close();
+        await OnFindSimilar.InvokeAsync(t.Id);
+    }
+
+    private async Task CopyNameAsync()
+    {
+        var t = _target!;
+        Close();
+        try
+        {
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./_content/AssetManager.Shared/js/browse.js");
+            if (await _module.InvokeAsync<bool>("copyText", t.Name)) Snackbar.Add($"Copied \"{t.Name}\".", Severity.Success);
+            else Snackbar.Add("The name could not be copied to the clipboard.", Severity.Warning);
+        }
+        catch (JSException) { Snackbar.Add("The name could not be copied to the clipboard.", Severity.Warning); }
+    }
+
+    private static string Px(double v) => v.ToString("0", System.Globalization.CultureInfo.InvariantCulture) + "px";
+}

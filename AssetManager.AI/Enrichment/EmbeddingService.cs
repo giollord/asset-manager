@@ -44,6 +44,14 @@ public sealed class EmbeddingService(CatalogStore catalog, IVectorIndex index, F
         return Fit(result[0].Vector.Span);
     }
 
+    /// <summary>Embeds a document-style text (e.g. a described query image); null when no embedding model is running.</summary>
+    public async Task<float[]?> EmbedDocumentAsync(string text, CancellationToken ct = default)
+    {
+        if (model() is not { } m || string.IsNullOrWhiteSpace(text)) return null;
+        var result = await m.Generator.GenerateAsync([text], cancellationToken: ct);
+        return Fit(result[0].Vector.Span);
+    }
+
     /// <summary>Re-embeds every dirty committed asset (and those embedded with another model); returns how many.</summary>
     public async Task<int> RefreshDirtyAsync(int batchSize = 32, IProgress<int>? progress = null, CancellationToken ct = default)
     {

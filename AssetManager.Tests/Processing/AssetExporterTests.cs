@@ -153,4 +153,42 @@ public class AssetExporterTests
     [InlineData("", true, "rock.png")]
     public void Target_paths_stay_inside_the_folder(string relative, bool preserve, string expected) =>
         Assert.Equal(expected, AssetExporter.TargetFor(new AssetFile { RelativePath = relative, FileName = "rock.png" }, preserve));
+
+    /// <summary>Spec "Meta files kept": a Unity project export writes each file with its original .meta (same GUID).</summary>
+    [Fact]
+    public async Task Unity_project_export_keeps_meta_files_and_guids()
+    {
+        await using var kit = await ImportKit.CreateAsync();
+        var ids = await CatalogPackageAsync(kit);
+        var exporter = new AssetExporter(kit.Store, kit.Processing.Resolver);
+        var project = Path.Combine(kit.Catalog.Dir.Path, "MyGame");
+        Directory.CreateDirectory(Path.Combine(project, "Assets"));
+        Directory.CreateDirectory(Path.Combine(project, "ProjectSettings"));
+        var target = Path.Combine(project, "Assets", "Imported");
+
+        Assert.Equal(project, UnityProject.FindRoot(target)); // the target need not exist yet
+        Assert.Null(UnityProject.FindRoot(Path.Combine(kit.Catalog.Dir.Path, "Elsewhere")));
+
+        var five = ids.Take(5).ToList();
+        var result = await exporter.ExtractAsync(five, new ExportOptions(target, PreserveStructure: false, UnityMeta: true), ct: Ct);
+
+        Assert.Equal(5, result.MetaWritten.Count);
+        for (var i = 0; i < 5; i++)
+        {
+            var file = Path.Combine(target, $"tex{i}.png");
+            Assert.True(File.Exists(file));
+            Assert.Contains($"guid: {FixtureBuilder.Guid($"tex{i}")}", File.ReadAllText(file + ".meta"));
+        }
+
+        // A renamed file takes its .meta along under the new name.
+        var again = await exporter.ExtractAsync([five[0]], new ExportOptions(target, false, ConflictChoice.Rename, UnityMeta: true), ct: Ct);
+        var renamed = Assert.Single(again.Written);
+        Assert.NotEqual(Path.Combine(target, "tex0.png"), renamed);
+        Assert.Contains($"guid: {FixtureBuilder.Guid("tex0")}", File.ReadAllText(renamed + ".meta"));
+
+        // Without the option, no .meta is written.
+        var plain = Path.Combine(kit.Catalog.Dir.Path, "Plain");
+        await exporter.ExtractAsync(five, new ExportOptions(plain, false), ct: Ct);
+        Assert.Empty(Directory.GetFiles(plain, "*.meta"));
+    }
 }

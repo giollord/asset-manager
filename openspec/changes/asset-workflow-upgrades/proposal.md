@@ -48,6 +48,9 @@ The AI also tags each asset on its own. When most of a pack is clearly "pixel ar
   - restore from Settings, which keeps a copy of the current catalog first
 - **Update check:** an opt-in check of GitHub Releases. It is off by default and is the only other network access besides model downloads. About shows when a newer version exists and links to its release page. Nothing is downloaded or installed.
 
+**Textured model previews**
+- **Texture matching:** many packs ship a model's textures under other names or in another folder, and the model's materials don't reference them (or reference paths that don't exist). Such models are rendered untextured today. After the existing matching (Unity `.mat` references, material paths, same file name), the source's remaining textures are shortlisted by name, folder and kind. Stripped name prefixes and suffixes (`SK_Orc` ↔ `T_Orc_Albedo`) decide on their own when they are exact. Otherwise the AI sees the model rendered with each candidate and picks the one that fits, or none. Confident matches are attached, marked "matched by AI", and the previews are re-rendered with them. Less confident ones are offered as suggestions. The user can apply, detach or choose a texture in the details drawer.
+
 **Browse and viewer polish**
 - **Click anywhere on a tile:** today only the preview area of a Browse card reacts to clicks; the name and type line below it do nothing, and the name text gets highlighted when the user clicks or drags over it. A click anywhere on the card selects it (with Ctrl/Shift as today), and a double click anywhere opens it. Text on cards is no longer selectable. Text in the details panel stays selectable.
 - **Card context menu:** the "Find similar" icon button on the card's preview goes away. Right-clicking a card (or pressing the context-menu key or Shift+F10 on the focused card) opens a menu with icons: "Open details", "Find similar" and "Copy name".
@@ -65,8 +68,9 @@ The AI also tags each asset on its own. When most of a pack is clearly "pixel ar
 
 ### Modified Capabilities
 - `asset-catalog`: source-level tags and the "source" tag origin; favourite, rating and notes on assets.
-- `ai-enrichment`: tag consensus across a source; suggested tag vocabulary; sprite sheet and pixel-art hints in item output.
+- `ai-enrichment`: tag consensus across a source; suggested tag vocabulary; sprite sheet and pixel-art hints in item output; picking a model's texture from rendered candidates.
 - `asset-search`: search by image; filters for favourites, minimum rating and notes; "find similar" moves to the card context menu; turntable inspection of stored model renders.
+- `asset-previews`: models get textures matched from their source when their materials reference none or missing ones; the user can review, change and detach them.
 - `asset-export`: drag out, Unity-aware export with `.meta` files and dependencies, credits report; the original viewer falls back to the turntable when a model's original is unavailable.
 - `catalog-stats`: license audit view.
 - `app-shell`: keyboard navigation; the "fully offline" rule allows the opt-in update check; whole-card click selection; card text not selectable; card context menu.
@@ -79,13 +83,14 @@ The AI also tags each asset on its own. When most of a pack is clearly "pixel ar
   - `SpriteSheetMetadata` and a pixel scale on `ImageMetadata`
   - a `SourceTag` table and `TagOrigin.Source`
   - an image fingerprint for palette re-ranking
+  - an origin on companion files (import, name match, AI, user) and stored texture suggestions
 
   The notes go into the full-text index.
 - **Processing:** new sprite-sheet grid detector and pixel-art analyser (Magick.NET), slicing readers for Unity `.meta`, TexturePacker and Aseprite, Unity dependency resolution from YAML GUID references, rescan job.
-- **AI:** consensus pass after the item pass, image-query description, sprite-sheet hint in the item schema.
+- **AI:** consensus pass after the item pass, image-query description, sprite-sheet hint in the item schema, texture choice from candidate renders before a model's item pass.
 - **UI:**
   - Browse (keyboard, drag source, image drop target, rating and favourite)
-  - details drawer (frames viewer, notes, rating)
+  - details drawer (frames viewer, notes, rating, model textures)
   - Sources (source tags, audit, rescan)
   - Dashboard (audit tiles)
   - Settings (backup, library folders, consensus thresholds, update check)

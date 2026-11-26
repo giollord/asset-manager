@@ -102,6 +102,30 @@ public sealed record ItemResult
 
     [Description("False when the item is not usable in a game (e.g. a store banner, a screenshot of an editor, a template).")]
     public bool IsGameAsset { get; init; } = true;
+
+    /// <summary>A hint only (design D4): the measured pixel-art detection decides; this never sets the flag by itself.</summary>
+    [Description("For images: true when it looks like pixel art (visible square pixels, few colours), false when not, null when unsure or not an image.")]
+    public bool? PixelArt { get; init; }
+
+    /// <summary>A hint only (design D3): the grid detector checks it; it never makes a sprite sheet by itself.</summary>
+    [Description("For images: whether it looks like a sprite sheet (several animation frames or sprites on a grid or atlas); null for non-images.")]
+    public SpriteSheetAnswer? SpriteSheet { get; init; }
+}
+
+[Description("Sprite sheet estimate; give columns and rows, or just the frame count, when you can count them.")]
+public sealed record SpriteSheetAnswer
+{
+    [Description("True when the image holds several frames or sprites.")]
+    public bool Likely { get; init; }
+
+    [Description("Estimated number of columns of frames, or null.")]
+    public int? Columns { get; init; }
+
+    [Description("Estimated number of rows of frames, or null.")]
+    public int? Rows { get; init; }
+
+    [Description("Estimated number of frames, or null.")]
+    public int? Frames { get; init; }
 }
 
 public sealed record ItemBatchResult : IAiResult

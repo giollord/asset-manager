@@ -1,5 +1,6 @@
 @page "/collections"
 @page "/collections/{Id:long}"
+@using Microsoft.Extensions.DependencyInjection
 @using AssetManager.Core.Domain
 @using AssetManager.Core.Jobs
 @using AssetManager.Core.Search
@@ -8,6 +9,7 @@
 @using AssetManager.Shared.Services
 @using AssetManager.Processing.Jobs
 @implements IDisposable
+@inject IServiceProvider Services
 @inject ICatalogStatsService Stats
 @inject CollectionService CollectionData
 @inject AssetSearchService Search
@@ -138,6 +140,12 @@
                             </MudChip>
                         }
                         <MudSpacer />
+                        @if (_edit.Id != 0 && _members?.Total > 0)
+                        {
+                            var collectionId = _edit.Id;
+                            <CreditsMenu Ids="() => Services.GetRequiredService<AssetManager.Data.Services.CreditsService>().CollectionIdsAsync(collectionId)"
+                                         Title="@_edit.Name" Label="Credits" Id="collection-credits" />
+                        }
                         @if (_edit.Include.Count > 0)
                         {
                             <MudButton Variant="Variant.Text" EndIcon="@Icons.Material.Filled.ArrowForward" OnClick="() => Nav.NavigateTo(BrowseHref(RuleQuery))" id="collection-browse">Open in Browse</MudButton>

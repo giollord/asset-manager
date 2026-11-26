@@ -116,6 +116,17 @@ On the web host, `UnsupportedPlatformServices` returns "not supported", and the 
 
 - **Risk:** this has to be proven first (task 1.1). If `DoDragDrop` cannot take over reliably after the WebView consumed `pointerdown`, the fallback is a dedicated drag handle button on the card or the selection bar. Pressing it starts the native drag directly, and the user can still drop into other apps.
 
+**Spike result (task 1.1, `AssetManager/Platforms/Windows/DragOutSpike.cs`): the in-card gesture works; no drag handle is needed.** Steps 1 and 2 stay as described above. Step 3 changes:
+- **OLE `DoDragDrop` does not work.** It starts with the button down and returns `DRAGDROP_S_DROP`, but the WinUI WebView2 keeps the mouse. The cursor stays the page's hand, no other window receives the drag, and only the app itself accepts the drop.
+- **What works: a WinUI drag started from the WebView2 control.**
+  - The host tracks the control's last `PointerPoint` through `AddHandler(PointerPressed/PointerMoved, handledEventsToo: true)`.
+  - On the page's message, it calls `ReleasePointerCaptures()` and then `StartDragAsync(point)`, queued on the `DispatcherQueue` so it runs outside the WebView2 event handler.
+  - `DragStarting` fills `Data.SetStorageItems(...)` with `Copy`, under a deferral. The drag ends with `Copy` in Explorer and in Unity's Project window.
+- **Message channel:** the page sends `chrome.webview.postMessage` with the asset id. It goes through the same `WebMessageReceived` hook as file drops, so no Blazor round trip is needed during the gesture. The page also cancels `dragstart` on cards, so the HTML drag cannot cancel the gesture.
+- **Drag visual:** the default is a snapshot of the whole WebView2. `DragUI.SetContentFromDataPackage` is not supported in WinUI 3 desktop (`0x800710DD`), and an exception in `DragStarting` cancels the drag. Use `DragUI.SetContentFromSoftwareBitmap` (the card thumbnail in 13.1), wrapped so that a failure only keeps the default visual.
+- **Own drops:** the WebView2 is also a drop target (`AllowDrop`), so dropping the drag back onto the app would import it. Drops that arrive during the app's own drag, or within a few seconds after it, are ignored.
+- **Temp files:** a drop target can keep the previous drag's files open, so each drag needs its own temp folder. `ExtractForClipboardAsync` must not reuse a fixed path.
+
 ### D8. Unity project export
 - **Detection:** walk up from the target folder looking for a folder with both `Assets/` and `ProjectSettings/`. That sets the option's default.
 - **`.meta` source:**
@@ -123,10 +134,12 @@ On the web host, `UnsupportedPlatformServices` returns "not supported", and the 
   - for Unity project folder sources, `<file>.meta` is next to the original
 
   The exporter copies it next to each written file and keeps the `.meta` name in step with any rename from conflict handling.
+- **Prefabs are cataloged:** `.prefab` moves from the noted (script) list to a new asset type, Prefab (stored as a string, so no migration; the fallback handler gives it no preview; the AI never changes it), so a prefab can be selected and exported. Packages imported earlier pick their prefabs up on re-import.
 - **References:**
   - a per-source GUID → `AssetFile` map comes from `AssetFile.UnityGuid` (packages) or is parsed from `.meta` files on demand (folders)
   - the YAML of `.mat`, `.prefab`, `.asset`, `.controller`, `.overrideController` and `.anim` files is scanned for `guid: <32 hex>`, and the result is closed transitively over the map
   - GUIDs that are not in the source, such as built-in resources (`0000000000000000e000000000000000`), are ignored
+  - noted files of the source (`.controller`, `.anim`, `.asset`, ...) are not in the catalog, so the scan also lists the source package or folder itself and maps their GUIDs to entries read from it directly
   - the referenced files are added to the plan as extra entries, marked "dependency" in the plan dialog
 - **GUID conflicts:** before writing, read the `guid:` line of every `.meta` under the target project's `Assets/` (cached per export) and list matches. "Skip conflicting" leaves those files out. "Continue" writes them, and Unity will then reassign one side.
 
@@ -203,6 +216,43 @@ On the web host, `UnsupportedPlatformServices` returns "not supported", and the 
 - Files: `docs/screenshots/browse.png`, `details-model.png`, `dashboard.png`, `import-review.png`, optimized PNGs under ~400 KB each. The README gets a "Screenshots" block right after the intro paragraphs: the Browse shot full-width, the other three smaller below it, each with alt text. The logo line stays as it is.
 - Taken after the Browse and viewer changes above, so they show the final UI.
 
+### D20. Texture matching for model previews
+
+Models are often shipped with textures their materials don't reference, or with references to files that aren't in the pack (`palette.png` when the pack ships `PolygonFarm_Texture_01.png`). The existing resolution, in `CompanionResolver` and `ModelHandler.ResolveTextures`, leaves such models untextured.
+
+- **Survey (2026-11-26, 3 sampled models per zip):**
+  - 27 Quaternius packs have materials with no texture reference while textures ship alongside. In Textured Stylized Trees, `Tree_3` has the materials `Bark` and `Tree_Leaves` next to `Textures/Tree_Bark.jpg`, `Birch_Bark.png`, `Tree_Leaves.png`…
+  - 12 Synty and Humble packs reference files that aren't in the pack. Some point at absolute paths on the author's desktop, or at another extension (`Color 2.jpg` vs `Textures/Color 2.png`). Others point at names that don't exist at all (`House2Text.jpg`).
+  - Models with several materials need different textures, so **matching is per material**.
+- **Name match (no AI)** is a new `CompanionResolver` step 4, run per material that has no base colour from steps 1–3:
+  - Names are compared after stripping prefixes (`T_`, `TX_`, `SM_`, `SK_`, `M_`, `MI_`, `MAT_`), the existing map suffixes and the extension.
+  - The keys compared are the material name, the stem of its missing reference, and, for a single-material model, the model's stem.
+  - A unique match anywhere in the source counts.
+  - Models with embedded textures are skipped.
+  - The normal and emissive maps with the same stripped name come along. Claimed textures become companions, as today.
+- **Origin:** `AssetFile.Origin` (`CompanionOrigin`: Reference, NameMatch, Ai, User; existing rows are Reference) records how a companion was found. The drawer shows it, and the "textures matched by AI" filter uses it.
+- **Which materials:** `TextureMatcher.MaterialsToMatch` loads the scene. A material qualifies when it has no base-colour map and is used by a mesh with texture coordinates, and either its reference is missing or a candidate has name or folder evidence. Models with `EditedFields.Textures` are skipped.
+- **Candidates:** the source's image and texture assets, plus other models' companions (shared atlases).
+  - Scored per material by stripped-name token overlap with the material name, the missing reference and the model name, plus folder proximity.
+  - Non-colour maps are excluded by suffix, and normal maps also by mean colour (blue-violet, little saturation spread).
+  - Previews such as `Preview.png` and `Sample.png` are excluded.
+  - The top 4 go to the AI.
+- **Renders:** the existing `IModelRenderer.RenderAsync` renders one front view (the middle ring, 1 azimuth, 256 px): once as it is, and once per candidate, with the candidate as `map` on the material being matched. Materials matched earlier keep their textures.
+- **AI judgment (`TextureJudge`):** shaped like `OrientationJudge`. The AI sees numbered renders plus names, and answers a candidate (0 = none), a confidence and a reason. It is asked a second time in reverse order, and a mismatch counts as confidence 0.
+  - At or above the match threshold (`TextureMatchThreshold`, default 0.7), the texture is attached as a companion with origin Ai. The texture also stays its own asset, because a match can be wrong and atlases are shared.
+  - At or above the suggestion threshold (`TextureSuggestThreshold`, default 0.4), the choice is stored in `ModelMetadata.TextureSuggestions`.
+  - Without vision, the best name-evidence candidate becomes a suggestion only.
+- **Order in `ModelEnrichment`:**
+  1. Texture judgment.
+  2. Orientation judgment. The probe is untextured, which is fine for shape.
+  3. One re-render when either changed.
+  4. The item pass, on the textured, upright views.
+
+  Companions are saved in their own DB context before the re-render, because `PreviewService` reads the files from the catalog.
+- **Review:** a "Textures" section in the details drawer lists companions (material, slot, file, thumbnail, origin). The user can detach a texture, apply or dismiss a suggestion, or choose a texture from the source's images for a material. Any of these sets `EditedFields.Textures` and re-renders.
+- **Settings → AI:** `TextureMatchEnabled` (on), `TextureMatchThreshold` and `TextureSuggestThreshold`.
+- **Cost:** 5 small renders and 2 AI calls per material that needs matching. Models without evidence cost nothing, so untextured stylized packs (Kenney) are left alone.
+
 ### D14. Migration and order of work
 One EF migration (`AddWorkflowFeatures`) covers:
 - `Favorite`, `Rating` and `Notes`
@@ -235,3 +285,18 @@ One EF migration (`AddWorkflowFeatures`) covers:
 ## Open Questions
 
 - The default grid-confidence threshold (0.6) and the pixel-art thresholds should be tuned on the sample library (`ASSETMANAGER_SAMPLES`) during implementation. The defaults are configurable, so tuning changes no spec.
+  - **Tuned on 2026-11-25** with Kenney Tiny Dungeon (pixel art, 136 PNGs), Kenney Castle Kit (low poly, 120 models, 338 PNGs) and a `.unitypackage` pixel-art platformer tileset with sliced sprites (36 images).
+    - The confidence threshold stays at 0.6. Most false sheets had a confidence of 0.7–1.0, so raising the threshold would not have removed them. Instead the detector gained three structural rules (`GridDetector`):
+      - Images under 32 px on their longest edge are single tiles. They are never a sheet or "uncertain". Before this, matching corners in 16 px tiles read as a background colour, and the AI's "likely sheet" marked 50 of the 136 Tiny Dungeon tiles "grid uncertain".
+      - A packed grid (no gutters) needs at least 6 cells, never exactly 2 along an axis, and cells at most 4:1. An AI hint that names the same counts can still confirm a smaller grid. Mortar and plank lines in single top-down tiles and isometric renders had read as 1×4, 2×2 and 2×1 grids.
+      - Result on Castle Kit: false sheets went from 41 to 7. The 7 left are 3 sprites that really are separate (poles with transparent gaps, reviewable) and 3 swatch textures with a real 4×4 colour grid.
+    - Slicing data was right for every sliced sprite in the `.unitypackage`: 31 sheets, e.g. a 6×12 hero with 68 frames, and 16×11 tiles with 145 frames.
+    - Known limit: a packed tilemap of seamless tiles (Tiny Dungeon's `tilemap_packed.png`) is not found. Tile borders change colour no more than the tile interiors do, so only the user or slicing data can give that grid. The gutter version, `tilemap.png`, is found as 12×11 cells of 17 px.
+    - Pixel-art thresholds unchanged: 132 of 136 Tiny Dungeon images and 34 of 35 platformer images were detected. On Castle Kit, 9 of 334 were, all small flat-colour icons.
+- **Texture matching, checked by hand on 2026-11-26** with Quaternius "Textured Stylized Trees" (135 models in FBX, OBJ, glTF and Blend) and Humble "Low Poly Farm. HappyLifeville" (105 models, imported twice: zip and extracted copy), local Gemma 4 E4B.
+  - The name match at import (step 4) attached 93 textures with no AI work: every tree's leaves (`Tree_Leaves`, `Pine_Leaves`, `Birch_Leaves`…) and the farm's `Color 2.png` palette for models whose material name matched.
+  - The AI attached 72 more. On a sheet of renders every farm attachment of `Color 2.png` was right (windmill, barrel, house, bridge, wheelbarrow…). Barks went to the right family (`Birch_Bark`, `Bark_Dead`). One doubtful pick: `Fence_Wood` got the characters' `LowPolyCharacters_Texture_B.png`.
+  - Recall is the problem, not precision: 62 of 105 farm models in each copy are still grey. The same Windmill got "none, confidence 1.00" in one copy and `Color 2.png` at 0.85 in the other; `Windmill_2` disagreed with itself across the two orders. No answer fell between 0.4 and 0.7, so no suggestions were made.
+  - Thresholds stay at 0.7 to attach and 0.4 to suggest: every attachment above 0.7 that was checked looked right.
+  - Fixed during the check: an OBJ's `.mtl`, claimed by its name, was sent to the renderer as a base-colour texture, and 90 OBJ previews failed ("The source image could not be decoded"). Only image files are used as textures now.
+  - Cost: the AI item pass ran at 11–14 items a minute, against about 35 without texture questions.

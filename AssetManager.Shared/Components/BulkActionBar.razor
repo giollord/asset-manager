@@ -5,6 +5,7 @@
 @using AssetManager.Processing.Import
 @using AssetManager.Processing.Jobs
 @inject TagService Tags
+@inject MetadataEditService Edits
 @inject DeletionService Deletion
 @inject ReimportService Reimports
 @inject AssetManager.AI.Enrichment.ReenrichService Reenrich
@@ -21,12 +22,24 @@
     <MudTooltip Text="Remove tags">
         <MudIconButton Icon="@Icons.Material.Outlined.LabelOff" Size="Size.Small" OnClick="UntagAsync" Disabled="_busy" Class="bulk-untag" />
     </MudTooltip>
+    <MudMenu Icon="@Icons.Material.Outlined.FavoriteBorder" Size="Size.Small" Dense="true" Class="bulk-favorite" Disabled="_busy" title="Favourite">
+        <MudMenuItem Icon="@Icons.Material.Filled.Favorite" OnClick="() => FavoriteAsync(true)" Class="bulk-favorite-add">Add to favourites</MudMenuItem>
+        <MudMenuItem Icon="@Icons.Material.Outlined.HeartBroken" OnClick="() => FavoriteAsync(false)" Class="bulk-favorite-remove">Remove from favourites</MudMenuItem>
+    </MudMenu>
+    <MudMenu Icon="@Icons.Material.Outlined.StarBorder" Size="Size.Small" Dense="true" Class="bulk-rate" Disabled="_busy" title="Rate">
+        @for (var stars = 5; stars >= 0; stars--)
+        {
+            var n = stars;
+            <MudMenuItem OnClick="() => RateAsync(n)" Class="@($"bulk-rate-{n}")">@(n == 0 ? "No rating" : new string('★', n) + new string('☆', 5 - n))</MudMenuItem>
+        }
+    </MudMenu>
     <MudTooltip Text="Copy files to the clipboard">
         <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" OnClick="CopyAsync" Disabled="_busy" Class="bulk-copy" />
     </MudTooltip>
     <MudTooltip Text="Extract to folder">
         <MudIconButton Icon="@Icons.Material.Filled.DriveFileMove" Size="Size.Small" OnClick="ExtractAsync" Disabled="_busy" Class="bulk-extract" />
     </MudTooltip>
+    <CreditsMenu Ids="() => Task.FromResult(Selection)" Title="@($"{Selection.Count} selected assets")" Class="bulk-credits" />
     <MudTooltip Text="Delete from catalog">
         <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="DeleteAsync" Disabled="_busy" Class="bulk-delete" />
     </MudTooltip>
@@ -82,8 +95,8 @@
         return result is { Canceled: false, Data: List<string> tags } && tags.Count > 0 ? tags : null;
     }
 
-    /// <summary>Spec "Delete requires confirmation": nothing is removed unless the user confirms.</summary>
-    private async Task DeleteAsync()
+    /// <summary>Spec "Delete requires confirmation": nothing is removed unless the user confirms. Also the Delete key in Browse.</summary>
+    public async Task DeleteAsync()
     {
         var count = Selection.Count;
         var ok = await Dialogs.ShowMessageBoxAsync("Delete from catalog",
@@ -93,6 +106,13 @@
         if (await Run(async () => { await Deletion.DeleteAssetsAsync(Ids); }, $"Deleted {Assets(count)}."))
             await OnDeleted.InvokeAsync();
     }
+
+    private Task FavoriteAsync(bool favorite) =>
+        Run(() => Edits.SetFavoriteAsync(Ids, favorite),
+            favorite ? $"Marked {Assets(Selection.Count)} as favourites." : $"Removed {Assets(Selection.Count)} from the favourites.");
+
+    private Task RateAsync(int stars) =>
+        Run(() => Edits.SetRatingAsync(Ids, stars), stars == 0 ? $"Cleared the rating of {Assets(Selection.Count)}." : $"Rated {Assets(Selection.Count)} {stars} of 5.");
 
     private Task CopyAsync() =>
         Run(() => Jobs.EnqueueAsync(JobTypes.Copy, $"Copy {Assets(Selection.Count)} to the clipboard", new AssetsPayload(Ids)),

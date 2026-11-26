@@ -67,7 +67,7 @@ public class SettingsPageTests : BunitContext, IAsyncLifetime
     public void Section_list_shows_every_section_in_page_order()
     {
         var page = RenderPage();
-        string[] all = ["appearance", "catalog", "ai-model", "import", "previews", "maintenance", "about"];
+        string[] all = ["appearance", "catalog", "backups", "ai-model", "import", "library", "previews", "maintenance", "about"];
         Assert.Equal(all, SettingsSection.All.Select(s => s.Id).ToArray());
         Assert.Equal(all, ListedSections(page));
         Assert.Equal(all, ShownSections(page));
@@ -79,7 +79,7 @@ public class SettingsPageTests : BunitContext, IAsyncLifetime
     {
         var page = RenderPage();
         Search(page, "CACHE");
-        Assert.Equal(["import"], ShownSections(page));
+        page.WaitForAssertion(() => Assert.Equal(["import"], ShownSections(page)));
         Assert.Equal(["import"], ListedSections(page));
         Assert.Empty(page.FindAll("#settings-no-match"));
     }
@@ -89,12 +89,12 @@ public class SettingsPageTests : BunitContext, IAsyncLifetime
     {
         var page = RenderPage();
         Search(page, "no such setting");
-        Assert.Empty(ShownSections(page));
+        page.WaitForAssertion(() => Assert.Empty(ShownSections(page)));
         Assert.Empty(ListedSections(page));
         Assert.Contains("No settings match", page.Find("#settings-no-match").TextContent);
 
         Search(page, "");
-        Assert.Equal(SettingsSection.All.Count, ShownSections(page).Length);
+        page.WaitForAssertion(() => Assert.Equal(SettingsSection.All.Count, ShownSections(page).Length));
         Assert.Equal(SettingsSection.All.Count, ListedSections(page).Length);
         Assert.Empty(page.FindAll("#settings-no-match"));
     }

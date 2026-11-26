@@ -265,4 +265,22 @@ public class ImportEnrichmentTests
             a => Assert.Equal(AiStatus.NotEnriched, a.AiStatus));
         Assert.Contains("not enriched", (await kit.Jobs.ItemErrorsAsync(job.Id, TestContext.Current.CancellationToken)).Single().Reason);
     }
+
+    [Fact]
+    public async Task Detected_pixel_art_gets_the_style_and_an_ai_tag()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var kit = await ImportKit.CreateAsync();
+        using var art = AssetManager.Tests.Processing.ImageHandlerTests.PixelArt(16, 4, 10);
+        var file = kit.Catalog.Dir.Write("Sprites/hero.png", art.ToByteArray(MagickFormat.Png));
+        kit.Catalog.Dir.Write("Sprites/sky.png", ImportStagingTests.Png(MagickColors.SkyBlue, 300)); // flat colour: no pixel grid to measure
+
+        await kit.CatalogAsync(new ImportRequest([Path.GetDirectoryName(file)!], Depth: AiDepth.None));
+
+        await using var db = kit.Catalog.Db();
+        var hero = await db.Assets.Include(a => a.Tags).ThenInclude(t => t.Tag).SingleAsync(a => a.Name == "hero", ct);
+        Assert.Equal((true, 4), (hero.Image!.IsPixelArt, hero.Image.PixelScale));
+        Assert.Contains("pixel art", hero.Style);
+        Assert.Contains(hero.Tags, t => t.Tag.Name == "pixel art" && t.Origin == TagOrigin.AI);
+    }
 }

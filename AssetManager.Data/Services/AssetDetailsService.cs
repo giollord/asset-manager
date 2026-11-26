@@ -7,8 +7,10 @@ namespace AssetManager.Data.Services;
 /// <param name="Asset">The asset with its files and source (read-only snapshot).</param>
 /// <param name="SourceChain">Provenance, outermost source first (e.g. folder → package → archive inside it).</param>
 /// <param name="Views">Previews to show: model angles, an animation clip's animated WebP, else the thumbnail / waveform / Unity preview.</param>
+/// <param name="SheetImage">For images: the sharper sprite-sheet preview when stored, else the thumbnail (frame viewer, grid overlay).</param>
 public sealed record AssetDetails(
-    Asset Asset, IReadOnlyList<Source> SourceChain, IReadOnlyList<TagView> Tags, IReadOnlyList<PreviewData> Views, bool HasAudioClip);
+    Asset Asset, IReadOnlyList<Source> SourceChain, IReadOnlyList<TagView> Tags, IReadOnlyList<PreviewData> Views, bool HasAudioClip,
+    PreviewData? SheetImage = null);
 
 /// <summary>Reads the details of one asset and applies the edits made there.</summary>
 public sealed class AssetDetailsService(CatalogStore catalog)
@@ -42,8 +44,10 @@ public sealed class AssetDetailsService(CatalogStore catalog)
             views = previews.Where(p => p.Kind is PreviewKind.Thumbnail or PreviewKind.Waveform or PreviewKind.UnityPreview)
                 .OrderBy(p => p.Kind == PreviewKind.Thumbnail ? 0 : p.Kind == PreviewKind.Waveform ? 1 : 2).ToList();
 
+        var sheet = previews.FirstOrDefault(p => p.Kind == PreviewKind.SpriteSheet) ?? previews.FirstOrDefault(p => p.Kind == PreviewKind.Thumbnail);
         return new AssetDetails(asset, chain, tags, views.Select(p => new PreviewData(p.Mime, p.Bytes)).ToList(),
-            previews.Any(p => p.Kind == PreviewKind.AudioClip));
+            previews.Any(p => p.Kind == PreviewKind.AudioClip),
+            asset.Type is AssetType.Image or AssetType.Texture or AssetType.SpriteSheet && sheet is not null ? new PreviewData(sheet.Mime, sheet.Bytes) : null);
     }
 
     /// <summary>

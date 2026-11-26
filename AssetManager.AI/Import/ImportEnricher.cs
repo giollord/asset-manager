@@ -7,6 +7,7 @@ using AssetManager.Data.Services;
 using AssetManager.Processing.Handlers;
 using AssetManager.Processing.Locations;
 using AssetManager.Processing.Settings;
+using AssetManager.Processing.Sprites;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -27,7 +28,8 @@ public sealed class ImportEnricher(
     ClassificationSettings classification,
     PreviewSettings previewSettings,
     IPreviewRerenderer rerenderer,
-    ILogger<ImportEnricher>? logger = null)
+    ILogger<ImportEnricher>? logger = null,
+    ITextureMatcher? textures = null)
 {
     private readonly ILogger _log = logger ?? (ILogger)NullLogger.Instance;
 
@@ -39,6 +41,9 @@ public sealed class ImportEnricher(
 
     /// <summary>Input modalities of the running model. Tests replace it.</summary>
     public Func<AiModalities> Modalities { get; init; } = () => runtime.Chat.Modalities;
+
+    /// <summary>The app settings (consensus thresholds). Tests replace it.</summary>
+    public Func<Core.Settings.AppSettings> Settings { get; init; } = () => runtime.Settings;
 
     public async Task PackPassAsync(long sessionId, IJobProgress progress, int stage, int stageCount, CancellationToken ct)
     {
@@ -135,7 +140,62 @@ public sealed class ImportEnricher(
                 .Select(a => a.Id).ToListAsync(ct)).Where(id => !attempted.Contains(id)).ToList();
             if (pending.Count > 0) progress.SetTotal(attempted.Count + pending.Count);
         }
+        await ConsensusAsync(chat, await SourceIdsAsync(sessionId, ct), progress, ct);
         await MarkStageAsync(sessionId, stage + 1, ct);
+    }
+
+    /// <summary>
+    /// The tag consensus step (design D2) for each source: shared tags and styles the AI accepts become source tags.
+    /// A failed request only leaves a warning; the assets keep their own tags.
+    /// </summary>
+    public async Task ConsensusAsync(StructuredChat chat, IReadOnlyList<long> sourceIds, IJobProgress progress, CancellationToken ct)
+    {
+        var settings = Settings();
+        if (!settings.ConsensusEnabled) return;
+        foreach (var sourceId in sourceIds)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var accepted = await ConsensusPass.RunForSourceAsync(catalog, chat, sourceId, settings, Modalities().Vision, ct);
+                if (accepted.Count > 0)
+                {
+                    _log.LogInformation("Source {Source}: consensus added source tags {Tags}", sourceId, string.Join(", ", accepted));
+                    catalog.NotifyContentChanged();
+                }
+            }
+            catch (Exception e) when (e is AiOutputException or HttpRequestException or System.ClientModel.ClientResultException or InvalidOperationException)
+            {
+                _log.LogWarning("Tag consensus for source {Source} failed: {Error}", sourceId, e.Message);
+                progress.Warn($"consensus:{sourceId}", null, $"Source tags could not be suggested: {e.Message}");
+            }
+        }
+    }
+
+    /// <summary>"Suggest source tags" on the Sources page: the consensus step for the given sources.</summary>
+    public async Task ConsensusForSourcesAsync(IReadOnlyList<long> sourceIds, IJobProgress progress, CancellationToken ct)
+    {
+        progress.SetStage("Suggesting source tags", 0, 1, sourceIds.Count);
+        await WaitForModelAsync(progress, ct);
+        if (Chat() is not { } client) throw new InvalidOperationException("No AI model is installed: source tags cannot be suggested.");
+        var chat = new StructuredChat(client, _log);
+        var settings = Settings();
+        foreach (var sourceId in sourceIds)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                // Asked for explicitly: runs even when the automatic step is turned off.
+                var accepted = await ConsensusPass.RunForSourceAsync(catalog, chat, sourceId, settings, Modalities().Vision, ct, force: true);
+                if (accepted.Count > 0) catalog.NotifyContentChanged();
+                progress.Advance(1, accepted.Count > 0 ? $"added {string.Join(", ", accepted)}" : null);
+            }
+            catch (AiOutputException e)
+            {
+                progress.Fail($"source:{sourceId}", null, e.Message);
+                progress.Advance(1);
+            }
+        }
     }
 
     /// <summary>
@@ -154,6 +214,7 @@ public sealed class ImportEnricher(
             bySource = rows.GroupBy(r => r.SourceId).Select(g => (g.Key, g.OrderBy(r => r.Type == AssetType.Model3D).ThenBy(r => r.Id).Select(r => r.Id).ToList())).ToList();
         }
         var fullInstruction = string.Join(" ", new[] { instruction, correction is null ? null : $"Correction from the user for these items: {correction}" }.Where(s => s is not null));
+        var suggested = await new CatalogSettingsService(catalog).GetSuggestedTagsAsync(ct);
 
         // Work units: chunks of one source. Up to Parallelism() of them talk to the model at once (the server has that
         // many slots); applying and saving results is serialized, so new tags are not created twice.
@@ -163,7 +224,7 @@ public sealed class ImportEnricher(
         {
             await using var db = catalog.CreateDbContext();
             var source = await db.AllSources.AsNoTracking().FirstAsync(s => s.Id == sourceId, ct);
-            var context = new ItemContext(source.DisplayName, source.Description, fullInstruction.Length > 0 ? fullInstruction : null);
+            var context = new ItemContext(source.DisplayName, source.Description, fullInstruction.Length > 0 ? fullInstruction : null, suggested);
             foreach (var chunk in ids.Chunk(ItemPass.SheetSize)) units.Add((sourceId, context, chunk));
             remaining[sourceId] = (ids.Count + ItemPass.SheetSize - 1) / ItemPass.SheetSize;
         }
@@ -182,7 +243,15 @@ public sealed class ImportEnricher(
 
             var requests = new List<(IReadOnlyList<ItemInput> Items, Func<Task<IReadOnlyList<ItemOutcome>>> Run)>();
             foreach (var model in inputs.Where(i => i.Asset.Type == AssetType.Model3D))
-                requests.Add(([model], async () => [(await ModelEnrichment.EnrichAsync(chat, model, context, modalities, options, rerenderer, ct: ct)).Item]));
+                requests.Add(([model], async () =>
+                {
+                    var r = await ModelEnrichment.EnrichAsync(chat, model, context, modalities, options, rerenderer, ct: ct,
+                        textures: textures, textureOptions: TextureMatchOptions.From(Settings()));
+                    foreach (var t in r.Textures)
+                        _log.LogInformation("Texture for {Asset} / {Material}: {Choice} ({Confidence:0.00}) {Outcome}: {Reason}", model.Asset.Name, t.Material,
+                            t.Chosen?.RelativePath ?? "none", t.Confidence, t.Attached ? "attached" : t.Suggested ? "suggested" : "not used", t.Reason);
+                    return [r.Item];
+                }));
             foreach (var request in ItemPass.Plan(inputs.Where(i => i.Asset.Type != AssetType.Model3D).ToList(), modalities))
                 requests.Add((request.Items.Select(i => i.Input).ToList(), () => ItemPass.RunAsync(chat, request, context, options, ct)));
 
@@ -193,6 +262,10 @@ public sealed class ImportEnricher(
                 try
                 {
                     outcomes = await run();
+                    // The AI thinks it is a sprite sheet: let the detector check, with the AI's counts as a candidate (design D3).
+                    foreach (var o in outcomes)
+                        if (ItemPass.SpriteHint(o.Result) is { } hint)
+                            await SpriteSheetClassifier.RedetectWithHintAsync(resolver, o.Asset, hint, options, ct);
                 }
                 catch (Exception e) when (e is AiOutputException or HttpRequestException or System.ClientModel.ClientResultException
                                                or InvalidOperationException or IOException or AggregateException)
@@ -231,7 +304,21 @@ public sealed class ImportEnricher(
             }
             bool sourceDone;
             lock (remaining) sourceDone = --remaining[sourceId] == 0;
-            if (sourceDone) catalog.NotifyContentChanged();
+            if (sourceDone)
+            {
+                // Replacing the AI tags may have dropped an AI-origin row of a tag that is also a source tag (design D1).
+                await save.WaitAsync(ct);
+                try
+                {
+                    await using var apply = catalog.CreateDbContext();
+                    await SourceTagService.ApplyAsync(apply, sourceId, ct);
+                }
+                finally
+                {
+                    save.Release();
+                }
+                catalog.NotifyContentChanged();
+            }
         });
     }
 
@@ -274,7 +361,8 @@ public sealed class ImportEnricher(
             var thumb = thumbs.FirstOrDefault(t => t.AssetId == asset.Id && t.Kind == PreviewKind.Thumbnail) ?? thumbs.FirstOrDefault(t => t.AssetId == asset.Id);
             if (thumb is not null) samples.Add(new AiImage(thumb.Mime, thumb.Bytes, asset.PrimaryFile?.RelativePath ?? asset.Name));
         }
-        return new PackInput(source.DisplayName, source.Kind, files, docs, samples, source.Store.StoreId is null ? null : source.Store, instruction);
+        var suggested = await new CatalogSettingsService(catalog).GetSuggestedTagsAsync(ct);
+        return new PackInput(source.DisplayName, source.Kind, files, docs, samples, source.Store.StoreId is null ? null : source.Store, instruction, suggested);
     }
 
     /// <summary>How long the AI stages wait for a configured model that is still loading.</summary>
@@ -345,7 +433,23 @@ public sealed class ImportEnricher(
             progress.Advance(assetIds.Count);
             return;
         }
-        await EnrichAssetsAsync(new StructuredChat(client, _log), assetIds, instruction, correction, progress, ct);
+        var chat = new StructuredChat(client, _log);
+        await EnrichAssetsAsync(chat, assetIds, instruction, correction, progress, ct);
+        await ConsensusAsync(chat, await WholeSourcesAsync(assetIds, ct), progress, ct);
+    }
+
+    /// <summary>The sources all of whose assets are in <paramref name="assetIds"/> (re-enriching a whole source runs the consensus step).</summary>
+    private async Task<List<long>> WholeSourcesAsync(IReadOnlyList<long> assetIds, CancellationToken ct)
+    {
+        await using var db = catalog.CreateDbContext();
+        var selected = new Dictionary<long, int>();
+        foreach (var chunk in assetIds.Distinct().Chunk(500))
+            foreach (var g in await db.AllAssets.Where(a => chunk.Contains(a.Id)).GroupBy(a => a.SourceId).Select(g => new { g.Key, Count = g.Count() }).ToListAsync(ct))
+                selected[g.Key] = selected.GetValueOrDefault(g.Key) + g.Count;
+        var whole = new List<long>();
+        foreach (var (sourceId, count) in selected)
+            if (await db.AllAssets.CountAsync(a => a.SourceId == sourceId && a.Included, ct) == count) whole.Add(sourceId);
+        return whole;
     }
 
     private async Task NotEnrichedAsync(long sessionId, IJobProgress progress, CancellationToken ct)

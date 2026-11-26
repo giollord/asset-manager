@@ -38,7 +38,27 @@ body.file-dragging .drop-zone {
 .asset-card { overflow: hidden; }
 .asset-card.mud-border-primary { border-width: 2px; }
 .asset-card-dimmed { opacity: .45; }
+/* Keyboard focus in the Browse grid (design D10). */
+.asset-card-focused { outline: 2px solid var(--mud-palette-secondary); outline-offset: 1px; }
+kbd.shortcut-key {
+    font-family: inherit; font-size: .8rem; padding: 1px 6px; border-radius: 4px;
+    border: 1px solid var(--mud-palette-lines-default); background: var(--mud-palette-background-gray);
+}
 .tag-editor { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; }
+/* Turntable of stored model renders (design D18). */
+.model-turntable { display: flex; align-items: center; justify-content: center; cursor: grab; touch-action: none; user-select: none; border-radius: 4px; overflow: hidden; }
+.model-turntable.dragging { cursor: grabbing; }
+.model-turntable:focus-visible { outline: 2px solid var(--mud-palette-primary); outline-offset: 1px; }
+.turntable-view { max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none; }
+.turntable-view[hidden] { display: none; }
+
+/* The asset card context menu (design D17). */
+.asset-menu:focus { outline: none; }
+.asset-menu-item { display: flex; align-items: center; gap: 12px; width: 100%; padding: 6px 16px; border: 0; background: none; color: inherit;
+                   font-family: var(--mud-typography-body2-family); font-size: var(--mud-typography-body2-size); text-align: left; cursor: pointer; }
+.asset-menu-item:hover:not(:disabled), .asset-menu-item:focus-visible { background: var(--mud-palette-action-default-hover); outline: none; }
+.asset-menu-item:disabled { cursor: default; color: var(--mud-palette-text-disabled); }
+.asset-menu-reason { display: block; font-size: .75rem; }
 .asset-card-overlay { position: absolute; right: 4px; bottom: 4px; display: flex; gap: 2px; }
 .asset-card-overlay .mud-icon-button { background: var(--mud-palette-surface); opacity: .9; }
 /* The gap between rows sits above each row, so the last row ends flush with the window's edge. */
@@ -91,3 +111,60 @@ html, body { height: 100%; overflow: hidden; }
    the "selectable" class. Inputs, alerts and snackbar messages (errors, job outcomes) keep normal selection. */
 body { user-select: none; }
 .selectable, input, textarea, [contenteditable], .mud-alert-message, .mud-snackbar-content-message { user-select: text; }
+/* Card text is never selectable, so clicks and drags over cards do not highlight it; nothing on a card opts back in (design D16). */
+.asset-card, .asset-card .selectable { user-select: none; }
+
+/* Search by image drop zone (design D6). */
+.image-drop-zone {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border: 1px dashed var(--mud-palette-lines-inputs);
+    border-radius: 4px;
+    font-size: 0.8rem;
+    color: var(--mud-palette-text-secondary);
+}
+
+.image-drop-zone.image-drop-active {
+    border-color: var(--mud-palette-primary);
+    background: var(--mud-palette-primary-hover);
+}
+
+.image-drop-zone.image-drop-disabled {
+    border-style: dotted;
+    opacity: 0.8;
+}
+
+.image-query-thumb {
+    height: 20px;
+    width: 20px;
+    object-fit: cover;
+    border-radius: 2px;
+    margin-right: 4px;
+}
+
+/* Sprite sheet grid editor: compact number fields in a wrapping grid. */
+.sprite-grid-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    gap: 4px 8px;
+}
+
+/* Drag-out: "Preparing N files…" while the files of a drag are copied out (design D7). */
+.dragout-status {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    transform: translateX(-50%);
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    border-radius: 18px;
+    background: var(--mud-palette-surface);
+    border: 1px solid var(--mud-palette-lines-default);
+    box-shadow: var(--mud-elevation-4);
+    pointer-events: none;
+}

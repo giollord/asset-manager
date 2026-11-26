@@ -33,6 +33,8 @@ public sealed class FileClassifier(ClassificationOptions options)
         (AssetType.Font, ".ttf .otf .woff .woff2 .fnt .ttc .bdf"),
         (AssetType.Video, ".mp4 .mov .webm .avi .mkv .wmv .m4v .mpg .mpeg .ogv .flv"),
         (AssetType.Material, ".mat .mtl .sbsar .mtlx"),
+        // Unity prefabs are cataloged so they can be exported with their references (design D8).
+        (AssetType.Prefab, ".prefab"),
         (AssetType.Document, ".txt .md .pdf .html .htm .rtf .doc .docx .odt .url .webloc"));
 
     private static readonly string[] SourceDocumentNames = ["license", "licence", "readme", "read me", "read_me", "credits", "copying", "attribution", "eula", "terms"];

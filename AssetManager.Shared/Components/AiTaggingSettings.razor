@@ -1,0 +1,134 @@
+@using AssetManager.Core.Domain
+@using AssetManager.Data.Services
+@implements IDisposable
+@inject CatalogSettingsService CatalogSettings
+@inject AssetManager.Data.CatalogStore Catalog
+@inject UiActions Ui
+@inject IAppSettingsStore AppSettings
+
+@* Settings → AI tagging: the catalog's suggested tag vocabulary (spec "Editing suggested tags", design D15). *@
+<MudPaper Class="pa-4" Outlined="true" id="ai-tagging-settings">
+    <MudText Typo="Typo.h6" Class="mb-2">@Title</MudText>
+
+    <MudText Typo="Typo.subtitle2">Suggested tags</MudText>
+    <MudText Typo="Typo.caption" Class="mud-text-secondary" HtmlTag="div">
+        The AI uses these exact tags whenever they apply, instead of near-synonyms ("low poly", not "lowpoly"), and may add others.
+        They belong to this catalog. Changes apply to later AI requests; existing assets keep their tags.
+    </MudText>
+    <div class="tag-editor mt-2" id="suggested-tags">
+        @foreach (var tag in _tags)
+        {
+            <MudChip T="string" Size="Size.Small" Text="@tag" Value="tag" OnClose="_ => RemoveAsync(tag)" Class="suggested-tag" data-tag="@tag" />
+        }
+        <MudTextField T="string" @bind-Value="_draft" Placeholder="Add a suggested tag" Immediate="true" OnKeyDown="OnKeyDown" Margin="Margin.Dense"
+                      Variant="Variant.Text" Class="tag-input" Style="max-width: 200px" id="suggested-tag-input" />
+    </div>
+    <MudButton Size="Size.Small" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.RestartAlt" OnClick="ResetAsync" Disabled="_isDefault"
+               Class="mt-2" id="suggested-tags-reset">Reset to the built-in list</MudButton>
+
+    @* Tag consensus (spec "Source tag consensus candidates", design D2). *@
+    <MudText Typo="Typo.subtitle2" Class="mt-4">Source tags by consensus</MudText>
+    <MudText Typo="Typo.caption" Class="mud-text-secondary" HtmlTag="div">
+        After the AI tagged a source's items, tags and styles that many of them share are shown to the AI, which decides whether they describe the
+        whole source. Accepted ones become source tags. The AI only adds tags.
+    </MudText>
+    <MudSwitch T="bool" Value="AppSettings.Current.ConsensusEnabled" ValueChanged="v => AppSettings.Update(s => s.ConsensusEnabled = v)" Color="Color.Primary"
+               Label="Suggest source tags after AI enrichment" id="consensus-enabled" />
+    <MudGrid Spacing="2">
+        <MudItem xs="12" md="6">
+            <MudNumericField T="int" Value="(int)Math.Round(AppSettings.Current.ConsensusShare * 100)" Min="10" Max="100" Margin="Margin.Dense"
+                             ValueChanged="v => AppSettings.Update(s => s.ConsensusShare = Math.Clamp(v, 10, 100) / 100.0)"
+                             Disabled="!AppSettings.Current.ConsensusEnabled" Label="Share of assets (%)"
+                             HelperText="A tag or style on at least this share of a source's game assets is a candidate. Default 60 %." id="consensus-share" />
+        </MudItem>
+        <MudItem xs="12" md="6">
+            <MudNumericField T="int" Value="AppSettings.Current.ConsensusMinAssets" Min="2" Max="1000" Margin="Margin.Dense"
+                             ValueChanged="v => AppSettings.Update(s => s.ConsensusMinAssets = Math.Max(2, v))"
+                             Disabled="!AppSettings.Current.ConsensusEnabled" Label="Minimum assets in a source"
+                             HelperText="Smaller sources get no consensus step. Default 5." id="consensus-min-assets" />
+        </MudItem>
+    </MudGrid>
+
+    @* Texture matching (spec "Choosing a model's texture", design D20). *@
+    <MudText Typo="Typo.subtitle2" Class="mt-4">Model textures</MudText>
+    <MudText Typo="Typo.caption" Class="mud-text-secondary" HtmlTag="div">
+        When a model's material has no texture, but the pack has textures with related names (or the one it refers to is missing), the AI sees the
+        model rendered with each candidate and picks the one that fits. Confident picks are attached and the previews re-rendered; less
+        confident ones are offered in the details as suggestions.
+    </MudText>
+    <MudSwitch T="bool" Value="AppSettings.Current.TextureMatchEnabled" ValueChanged="v => AppSettings.Update(s => s.TextureMatchEnabled = v)" Color="Color.Primary"
+               Label="Let the AI choose textures for untextured models" id="texture-match-enabled" />
+    <MudGrid Spacing="2">
+        <MudItem xs="12" md="6">
+            <MudNumericField T="int" Value="(int)Math.Round(AppSettings.Current.TextureMatchThreshold * 100)" Min="10" Max="100" Margin="Margin.Dense"
+                             ValueChanged="v => AppSettings.Update(s => s.TextureMatchThreshold = Math.Clamp(v, 10, 100) / 100.0)"
+                             Disabled="!AppSettings.Current.TextureMatchEnabled" Label="Attach at confidence (%)"
+                             HelperText="Picks at least this sure are attached. Default 70 %." id="texture-match-threshold" />
+        </MudItem>
+        <MudItem xs="12" md="6">
+            <MudNumericField T="int" Value="(int)Math.Round(AppSettings.Current.TextureSuggestThreshold * 100)" Min="0" Max="100" Margin="Margin.Dense"
+                             ValueChanged="v => AppSettings.Update(s => s.TextureSuggestThreshold = Math.Clamp(v, 0, 100) / 100.0)"
+                             Disabled="!AppSettings.Current.TextureMatchEnabled" Label="Suggest at confidence (%)"
+                             HelperText="Less sure picks above this are only suggested. Default 40 %." id="texture-suggest-threshold" />
+        </MudItem>
+    </MudGrid>
+</MudPaper>
+
+@code {
+    public const string Title = "AI tagging";
+
+    public static readonly string[] SearchTerms =
+    [
+        Title, "Suggested tags", "Tag vocabulary", "Reset to the built-in list", "Source tags by consensus",
+        "Suggest source tags after AI enrichment", "Share of assets (%)", "Minimum assets in a source",
+        "Model textures", "Let the AI choose textures for untextured models", "Attach at confidence (%)", "Suggest at confidence (%)",
+    ];
+
+    private IReadOnlyList<string> _tags = [];
+    private bool _isDefault = true;
+    private string? _draft;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Catalog.Opened += OnCatalogOpened;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            _tags = await CatalogSettings.GetSuggestedTagsAsync();
+            _isDefault = _tags.SequenceEqual(SuggestedTags.Default);
+        }
+        catch (InvalidOperationException) { } // no catalog open yet
+    }
+
+    private void OnCatalogOpened() => InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key is not ("Enter" or ",") || string.IsNullOrWhiteSpace(_draft)) return;
+        var tag = _draft.Trim().TrimEnd(',');
+        _draft = "";
+        if (tag.Length > 0) await SaveAsync([.. _tags, tag]);
+    }
+
+    private Task RemoveAsync(string tag) => SaveAsync(_tags.Where(t => t != tag).ToList());
+
+    private async Task SaveAsync(IReadOnlyList<string> tags)
+    {
+        if (await Ui.RunAsync(() => CatalogSettings.SetSuggestedTagsAsync(tags))) await LoadAsync();
+    }
+
+    private async Task ResetAsync()
+    {
+        if (await Ui.RunAsync(() => CatalogSettings.ResetSuggestedTagsAsync(), "Suggested tags reset to the built-in list.")) await LoadAsync();
+    }
+
+    public void Dispose() => Catalog.Opened -= OnCatalogOpened;
+}

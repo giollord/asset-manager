@@ -74,6 +74,8 @@ public sealed class CatalogStore : IDbContextFactory<CatalogDbContext>
             }
             await db.Database.MigrateAsync(ct);
             await EnsureAutoVacuumAsync(db, ct);
+            // Backups are single files in rollback-journal mode; a catalog opened from one goes back to WAL.
+            await db.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;", ct);
         }
 
         _options = options;

@@ -1,0 +1,280 @@
+@using AssetManager.AI.Import
+@using AssetManager.Core.Domain
+@using AssetManager.Core.Jobs
+@using AssetManager.Data.Services
+@using AssetManager.Processing.Import
+@using AssetManager.Processing.Sync
+@using AssetManager.Shared.Services
+@using Microsoft.EntityFrameworkCore
+@implements IDisposable
+@inject AssetManager.Data.CatalogStore Catalog
+@inject IProgressHub Hub
+@inject IJobQueue Jobs
+@inject ImportService Imports
+@inject ReimportService Reimports
+@inject DeletionService Deletion
+@inject IAppSettingsStore Settings
+@inject IDialogService Dialogs
+@inject UiActions Ui
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+
+@* The latest rescan and library scan results (specs "Acting on rescan results", "Library folders"). The results live
+   in the jobs' summaries, not in the catalog; acting on them goes through the staged import, re-import and deletion. *@
+<MudPaper Outlined="true" Class="pa-4" id="sync-results">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+        <MudIcon Icon="@Icons.Material.Filled.Sync" Color="Color.Primary" />
+        <MudText Typo="Typo.h5" Style="flex: 1">Changes</MudText>
+        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Refresh" OnClick="CheckAllAsync" Disabled="Running" id="sync-check">
+            Check again
+        </MudButton>
+    </MudStack>
+
+    <MudText Typo="Typo.subtitle1" Class="mt-3">Imported sources</MudText>
+    @if (_rescanJob is null)
+    {
+        <MudText Typo="Typo.body2" Class="mud-text-secondary" id="rescan-none">No rescan yet.</MudText>
+    }
+    else if (_rescanJob.IsActive)
+    {
+        <JobProgressView Job="_rescanJob" Compact="true" />
+    }
+    else if (_rescan is null)
+    {
+        <MudText Typo="Typo.body2" Color="Color.Error">@(_rescanJob.Error ?? "The rescan did not finish.")</MudText>
+    }
+    else
+    {
+        <MudText Typo="Typo.caption" Class="mud-text-secondary" HtmlTag="div">
+            Checked @When(_rescanJob): @Count(_rescan.Results.Count, "source") · @Count(_rescan.Changed, "changed source") · @_rescan.Results.Count(r => r.Status == RescanStatus.Unchanged) unchanged · @_rescan.Skipped skipped
+        </MudText>
+        @foreach (var r in _rescan.Results.Where(r => r.Status != RescanStatus.Unchanged))
+        {
+            <MudPaper Outlined="true" Class="pa-3 mt-2 rescan-source" data-id="@r.SourceId">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                    <MudIcon Icon="@AssetManager.Shared.Pages.Sources.KindIcon(r.Kind)" Size="Size.Small" Class="mud-text-secondary" />
+                    <MudLink Typo="Typo.subtitle2" Href="@($"sources/{r.SourceId}")" Style="flex: 1">@r.Name</MudLink>
+                    @if (r.Status == RescanStatus.Skipped)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">skipped</MudChip>
+                    }
+                </MudStack>
+                @if (r.Status == RescanStatus.Skipped)
+                {
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary selectable rescan-skip">Skipped: @r.SkipReason</MudText>
+                }
+                else
+                {
+                    @if (r.ContainerChanged)
+                    {
+                        <MudText Typo="Typo.body2">The file changed since it was imported.</MudText>
+                    }
+                    @FileList("added", "Added", r.Added)
+                    @FileList("changed", "Changed", r.Changed)
+                    @FileList("removed", "Removed", r.Removed)
+                    <MudStack Row="true" Spacing="2" Wrap="Wrap.Wrap" Class="mt-2">
+                        @if (r.Added.Count > 0)
+                        {
+                            <MudButton Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Add" Class="rescan-import-added"
+                                       Disabled="@(Done(r, "added"))" OnClick="() => ImportAddedAsync(r)">Import @Count(r.Added.Count, "added file")</MudButton>
+                        }
+                        @if (ChangedAssets(r).Count > 0)
+                        {
+                            <MudButton Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Refresh" Class="rescan-reimport"
+                                       Disabled="@(Done(r, "changed"))" OnClick="() => ReimportAsync(r)">Re-import @Count(ChangedAssets(r).Count, "changed asset")</MudButton>
+                        }
+                        @if (r.Removed.Count > 0)
+                        {
+                            <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete" Class="rescan-remove"
+                                       Disabled="@(Done(r, "removed"))" OnClick="() => RemoveMissingAsync(r)">Remove @Count(RemovedAssets(r).Count, "missing asset")</MudButton>
+                        }
+                        @if (r.ContainerChanged && r.Path is { } path)
+                        {
+                            <MudButton Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Upgrade" Class="rescan-update"
+                                       title="Imports the changed file; the import review shows it as a new version of this source"
+                                       OnClick="() => UpdateAsync([path])">Update source</MudButton>
+                        }
+                        @foreach (var nested in r.Changed.Where(c => c.AssetId is null && r.Path is not null))
+                        {
+                            <MudButton Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Upgrade" Class="rescan-update-nested"
+                                       OnClick="() => UpdateAsync([System.IO.Path.Combine(r.Path!, nested.RelativePath)])">Update @nested.RelativePath</MudButton>
+                        }
+                    </MudStack>
+                }
+            </MudPaper>
+        }
+    }
+
+    <MudText Typo="Typo.subtitle1" Class="mt-4">Library folders</MudText>
+    @if (_libraryJob is null)
+    {
+        <MudText Typo="Typo.body2" Class="mud-text-secondary" id="library-none">
+            No library scan yet. Add the folders where you keep or download packs in <MudLink Href="settings">Settings → Library</MudLink>.
+        </MudText>
+    }
+    else if (_libraryJob.IsActive)
+    {
+        <JobProgressView Job="_libraryJob" Compact="true" />
+    }
+    else if (_library is null)
+    {
+        <MudText Typo="Typo.body2" Color="Color.Error">@(_libraryJob.Error ?? "The library scan did not finish.")</MudText>
+    }
+    else
+    {
+        <MudText Typo="Typo.caption" Class="mud-text-secondary" HtmlTag="div">Checked @When(_libraryJob): @Count(_library.NewPacks, "pack") not imported yet</MudText>
+        @foreach (var folder in _library.Unavailable)
+        {
+            <MudText Typo="Typo.body2" Class="mud-text-secondary selectable library-unavailable">Skipped @folder: not attached or missing</MudText>
+        }
+        @if (_library.Entries.Count > 0)
+        {
+            <MudList T="string" Dense="true" id="library-entries">
+                @foreach (var e in _library.Entries)
+                {
+                    <MudListItem T="string" Class="library-entry" data-path="@e.Path">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                            <MudCheckBox T="bool" Value="_chosen.Contains(e.Path)" ValueChanged="v => Choose(e.Path, v)" Dense="true" Class="library-choose" />
+                            <MudIcon Icon="@AssetManager.Shared.Pages.Sources.KindIcon(e.Kind)" Size="Size.Small" Class="mud-text-secondary" />
+                            <MudText Typo="Typo.body2" Style="flex: 1" Class="selectable" title="@e.Path">@e.Name</MudText>
+                            @if (e.VersionOfName is not null)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined" Class="library-version">new version of @e.VersionOfName</MudChip>
+                            }
+                        </MudStack>
+                    </MudListItem>
+                }
+            </MudList>
+            <MudStack Row="true" Spacing="2">
+                <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="ChooseAll">Select all</MudButton>
+                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.FileUpload" Disabled="_chosen.Count == 0"
+                           OnClick="ImportChosenAsync" id="library-import">Import @Count(_chosen.Count, "pack")</MudButton>
+            </MudStack>
+        }
+    }
+</MudPaper>
+
+@code {
+    private JobSnapshot? _rescanJob, _libraryJob;
+    private RescanSummary? _rescan;
+    private LibraryScanSummary? _library;
+    private readonly HashSet<string> _chosen = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _done = [];
+
+    private bool Running => _rescanJob?.IsActive == true || _libraryJob?.IsActive == true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Hub.Changed += OnJob;
+        Hub.Finished += OnJob;
+        await LoadAsync();
+    }
+
+    private void OnJob(JobSnapshot job)
+    {
+        if (job.Type is RescanJob.JobType or LibraryScanJob.JobType) InvokeAsync(async () => { await LoadAsync(); StateHasChanged(); });
+    }
+
+    private async Task LoadAsync()
+    {
+        await using var db = Catalog.CreateDbContext();
+        var rescan = await LatestAsync(db, RescanJob.JobType);
+        var library = await LatestAsync(db, LibraryScanJob.JobType);
+        if (rescan?.Id != _rescanJob?.Id) _done.Clear();
+        if (library?.Id != _libraryJob?.Id) _chosen.Clear();
+        (_rescanJob, _libraryJob) = (rescan, library);
+        _rescan = Summary<RescanSummary>(rescan);
+        _library = Summary<LibraryScanSummary>(library);
+    }
+
+    private async Task<JobSnapshot?> LatestAsync(AssetManager.Data.CatalogDbContext db, string type)
+    {
+        var job = await db.Jobs.AsNoTracking().Where(j => j.Type == type).OrderByDescending(j => j.Id).FirstOrDefaultAsync();
+        return job is null ? null : Hub.Get(job.Id) is { } live && live.IsActive ? live : JobSnapshot.Of(job);
+    }
+
+    private static T? Summary<T>(JobSnapshot? job) where T : class =>
+        job is { State: JobState.Completed, SummaryJson: { } json } ? System.Text.Json.JsonSerializer.Deserialize<T>(json, JobJson.Options) : null;
+
+    /// <summary>Rescans all sources and scans the library folders.</summary>
+    private Task CheckAllAsync() => Ui.RunAsync(async () =>
+    {
+        await Jobs.EnqueueAsync(RescanJob.JobType, "Rescan sources", new RescanPayload(null));
+        await Jobs.EnqueueAsync(LibraryScanJob.JobType, "Scan library folders", new LibraryScanPayload());
+        await LoadAsync();
+    });
+
+    private static List<long> ChangedAssets(RescanResult r) => r.Changed.Select(c => c.AssetId).OfType<long>().Distinct().ToList();
+
+    private static List<long> RemovedAssets(RescanResult r) => r.Removed.Select(c => c.AssetId).OfType<long>().Distinct().ToList();
+
+    private bool Done(RescanResult r, string action) => _done.Contains($"{r.SourceId}:{action}");
+
+    /// <summary>The added files go through the staged import review, assigned to this source.</summary>
+    private Task ImportAddedAsync(RescanResult r) => StartImportAsync(new ImportRequest([r.Path!], Depth: Settings.Current.DefaultAiDepth,
+        IntoSourceId: r.SourceId, OnlyPaths: r.Added.Select(a => a.RelativePath).ToList()), () => _done.Add($"{r.SourceId}:added"));
+
+    /// <summary>A changed package or archive is imported again; the review offers it as a new version of its source.</summary>
+    private Task UpdateAsync(IReadOnlyList<string> paths) => StartImportAsync(new ImportRequest(paths, Depth: Settings.Current.DefaultAiDepth));
+
+    private async Task StartImportAsync(ImportRequest request, Action? started = null)
+    {
+        if ((await Imports.OpenSessionsAsync()).Count > 0)
+        {
+            Snackbar.Add("Finish or cancel the open import first.", Severity.Warning);
+            return;
+        }
+        if (await Ui.RunAsync(() => Imports.StartAsync(request)) is not null)
+        {
+            started?.Invoke();
+            Nav.NavigateTo("import");
+        }
+    }
+
+    private async Task ReimportAsync(RescanResult r)
+    {
+        if (await Ui.RunAsync(() => Reimports.StartAsync(ChangedAssets(r), false), "Re-import started.") != 0) _done.Add($"{r.SourceId}:changed");
+    }
+
+    private async Task RemoveMissingAsync(RescanResult r)
+    {
+        var ids = RemovedAssets(r);
+        var ok = await Dialogs.ShowMessageBoxAsync("Remove missing assets",
+            $"Remove {Count(ids.Count, "asset")} of \"{r.Name}\" whose files are gone from the catalog? Their previews, tags and stored copies are removed too.",
+            yesText: $"Remove {Count(ids.Count, "asset")}", cancelText: "Cancel");
+        if (ok != true) return;
+        if (await Ui.RunAsync(() => Deletion.DeleteAssetsAsync(ids), $"Removed {Count(ids.Count, "asset")}.") != 0) _done.Add($"{r.SourceId}:removed");
+    }
+
+    private void Choose(string path, bool chosen)
+    {
+        if (chosen) _chosen.Add(path);
+        else _chosen.Remove(path);
+    }
+
+    private void ChooseAll() => _chosen.UnionWith(_library!.Entries.Select(e => e.Path));
+
+    /// <summary>The chosen packs in one staged import; new versions are proposed as replacements in its review.</summary>
+    private Task ImportChosenAsync() =>
+        StartImportAsync(new ImportRequest([.. _library!.Entries.Where(e => _chosen.Contains(e.Path)).Select(e => e.Path)], Depth: Settings.Current.DefaultAiDepth));
+
+    private RenderFragment FileList(string kind, string label, IReadOnlyList<RescanFile> files) => __builder =>
+    {
+        if (files.Count == 0) return;
+        <div class="@($"rescan-{kind}")">
+            <MudText Typo="Typo.body2"><b>@label</b> (@files.Count.ToString("N0")):
+                <span class="selectable mud-text-secondary">@string.Join(", ", files.Take(8).Select(f => f.RelativePath))@(files.Count > 8 ? $" and {files.Count - 8:N0} more" : "")</span>
+            </MudText>
+        </div>
+    };
+
+    private static string When(JobSnapshot job) => (job.FinishedAt ?? job.CreatedAt).ToLocalTime().ToString("g");
+
+    private static string Count(int n, string noun) => n == 1 ? $"1 {noun}" : $"{n:N0} {noun}s";
+
+    public void Dispose()
+    {
+        Hub.Changed -= OnJob;
+        Hub.Finished -= OnJob;
+    }
+}

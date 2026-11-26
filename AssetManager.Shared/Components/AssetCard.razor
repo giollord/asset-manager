@@ -1,43 +1,57 @@
 @using AssetManager.Core.Domain
 @implements IDisposable
 
-@* One asset tile: preview on the theme's preview surface, name, type, selection checkbox and extra badges. *@
-<MudPaper Outlined="true" Class="@CardClass" Style="width: 168px" data-id="@AssetId">
-    <div class="preview-surface asset-card-preview" style="height: 136px; display: flex; align-items: center; justify-content: center; cursor: pointer; position: relative"
-         @onclick="OnPreviewClick" @ondblclick="OnPreviewDoubleClick" @onmouseenter="StartCycling" @onmouseleave="StopCycling">
-        @if (_hover is not null)
-        {
-            <img src="@_hover" alt="@Name" class="asset-card-animation" style="max-width: 100%; max-height: 136px; object-fit: contain" />
-        }
-        else if (_views is { Count: > 1 } && _viewIndex > 0)
-        {
-            <img src="@_views[_viewIndex]" alt="@Name" class="asset-card-view" data-view="@_viewIndex" style="max-width: 100%; max-height: 136px; object-fit: contain" />
-        }
-        else if (_preview is not null)
-        {
-            <img src="@_preview" alt="@Name" style="max-width: 100%; max-height: 136px; object-fit: contain" />
-        }
-        else
-        {
-            <MudIcon Icon="@TypeIcon(Type)" Size="Size.Large" Class="mud-text-secondary" />
-        }
-        @if (Overlay is not null)
-        {
-            <div class="asset-card-overlay" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">@Overlay</div>
-        }
-    </div>
-    <div class="pa-1">
-        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="0">
-            @if (Selectable)
+@* One asset tile: preview on the theme's preview surface, name, type, selection checkbox and extra badges. A click or
+   double click anywhere on the card counts (design D16); the checkbox and the overlay controls keep their own clicks. *@
+<MudPaper Outlined="true" Class="@CardClass" Style="width: 168px; cursor: pointer" data-id="@AssetId" @onclick="OnCardClick" @ondblclick="OnCardDoubleClick">
+    @* The card's content: a right click here opens the asset menu instead of the WebView's (design D17). *@
+    <div class="asset-card-body" @oncontextmenu="OnCardContextMenu" @oncontextmenu:preventDefault="OnContextMenu.HasDelegate">
+        <div class="preview-surface asset-card-preview" style="height: 136px; display: flex; align-items: center; justify-content: center; position: relative"
+             @onmouseenter="StartCycling" @onmouseleave="OnMouseLeave">
+            @if (_hover is not null)
             {
-                <MudCheckBox T="bool" Value="Selected" ValueChanged="v => SelectedChanged.InvokeAsync(v)" Size="Size.Small" Dense="true" Class="asset-select" />
+                <img src="@_hover" alt="@Name" class="asset-card-animation" style="max-width: 100%; max-height: 136px; object-fit: contain" />
             }
-            <MudText Typo="Typo.body2" Class="asset-card-name selectable" Style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap" title="@Name">@Name</MudText>
-        </MudStack>
-        <MudStack Row="true" Spacing="1" Wrap="Wrap.Wrap" Class="px-1">
-            <MudText Typo="Typo.caption" Class="mud-text-secondary">@Type</MudText>
-            @Badges
-        </MudStack>
+            else if (_views is { Count: > 1 } && _viewIndex > 0)
+            {
+                <img src="@_views[_viewIndex]" alt="@Name" class="asset-card-view" data-view="@_viewIndex" style="max-width: 100%; max-height: 136px; object-fit: contain" />
+            }
+            else if (_preview is not null)
+            {
+                <img src="@_preview" alt="@Name" style="max-width: 100%; max-height: 136px; object-fit: contain" />
+            }
+            else
+            {
+                <MudIcon Icon="@TypeIcon(Type)" Size="Size.Large" Class="mud-text-secondary" />
+            }
+            @if (Overlay is not null)
+            {
+                <div class="asset-card-overlay" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">@Overlay</div>
+            }
+        </div>
+        <div class="pa-1">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="0">
+                @if (Selectable)
+                {
+                    <span @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
+                        <MudCheckBox T="bool" Value="Selected" ValueChanged="v => SelectedChanged.InvokeAsync(v)" Size="Size.Small" Dense="true" Class="asset-select" />
+                    </span>
+                }
+                <MudText Typo="Typo.body2" Class="asset-card-name" Style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap" title="@Name">@Name</MudText>
+            </MudStack>
+            <MudStack Row="true" Spacing="1" Wrap="Wrap.Wrap" Class="px-1">
+                <MudText Typo="Typo.caption" Class="mud-text-secondary asset-card-type">@Type</MudText>
+                @if (Favorite)
+                {
+                    <MudIcon Icon="@Icons.Material.Filled.Favorite" Size="Size.Small" Color="Color.Secondary" title="Favourite" Class="card-favorite" />
+                }
+                @if (Rating > 0)
+                {
+                    <MudText Typo="Typo.caption" Class="card-rating" title="@($"Rated {Rating} of 5")">★@Rating</MudText>
+                }
+                @Badges
+            </MudStack>
+        </div>
     </div>
 </MudPaper>
 
@@ -65,11 +79,25 @@
 
     [Parameter] public RenderFragment? Badges { get; set; }
 
-    /// <summary>Opens the asset: a single click on the preview, or a double click when <see cref="OnClick"/> is set.</summary>
+    [Parameter] public bool Favorite { get; set; }
+
+    /// <summary>Has the keyboard focus in the grid (visibly marked).</summary>
+    [Parameter] public bool Focused { get; set; }
+
+    /// <summary>Turns a model's preview (cycles its angles) as if the pointer rested on it; Space in Browse.</summary>
+    [Parameter] public bool Spin { get; set; }
+
+    /// <summary>0 = unrated, else 1-5 stars.</summary>
+    [Parameter] public int Rating { get; set; }
+
+    /// <summary>Opens the asset: a single click on the card, or a double click when <see cref="OnClick"/> is set.</summary>
     [Parameter] public EventCallback<long> OnOpen { get; set; }
 
-    /// <summary>A click on the preview (with modifier keys, for grid selection).</summary>
+    /// <summary>A click anywhere on the card (with modifier keys, for grid selection).</summary>
     [Parameter] public EventCallback<MouseEventArgs> OnClick { get; set; }
+
+    /// <summary>A right click on the card (the pointer position opens the asset context menu there).</summary>
+    [Parameter] public EventCallback<MouseEventArgs> OnContextMenu { get; set; }
 
     /// <summary>Loads a model's angles, which cycle while the pointer rests on the preview; for an animation, its animated preview, which plays.</summary>
     [Parameter] public Func<long, Task<IReadOnlyList<string>>>? ModelViews { get; set; }
@@ -85,9 +113,11 @@
     private int _viewIndex;
     private CancellationTokenSource? _cycling;
 
-    private Task OnPreviewClick(MouseEventArgs e) => OnClick.HasDelegate ? OnClick.InvokeAsync(e) : OnOpen.InvokeAsync(AssetId);
+    private Task OnCardClick(MouseEventArgs e) => OnClick.HasDelegate ? OnClick.InvokeAsync(e) : OnOpen.InvokeAsync(AssetId);
 
-    private Task OnPreviewDoubleClick() => OnClick.HasDelegate ? OnOpen.InvokeAsync(AssetId) : Task.CompletedTask;
+    private Task OnCardContextMenu(MouseEventArgs e) => OnContextMenu.InvokeAsync(e);
+
+    private Task OnCardDoubleClick() => OnClick.HasDelegate ? OnOpen.InvokeAsync(AssetId) : Task.CompletedTask;
 
     private async Task StartCycling()
     {
@@ -112,6 +142,11 @@
         catch (OperationCanceledException) { }
     }
 
+    private void OnMouseLeave()
+    {
+        if (!Spin) StopCycling();
+    }
+
     private void StopCycling()
     {
         _cycling?.Cancel();
@@ -125,10 +160,18 @@
     private string? _preview;
     private (long, int)? _loaded;
 
-    private string CardClass => "asset-card" + (Selected ? " mud-border-primary" : "") + (Dimmed ? " asset-card-dimmed" : "");
+    private string CardClass => "asset-card" + (Selected ? " mud-border-primary" : "") + (Dimmed ? " asset-card-dimmed" : "") + (Focused ? " asset-card-focused" : "");
+
+    private bool _spinning;
 
     protected override async Task OnParametersSetAsync()
     {
+        if (Spin != _spinning)
+        {
+            _spinning = Spin;
+            if (Spin) _ = InvokeAsync(StartCycling);
+            else StopCycling();
+        }
         if (PreviewUrl is null || _loaded == (AssetId, PreviewVersion)) return;
         if (_loaded?.Item1 != AssetId)
         {
@@ -147,6 +190,7 @@
         AssetType.Video => Icons.Material.Filled.Movie,
         AssetType.Font => Icons.Material.Filled.FontDownload,
         AssetType.Document => Icons.Material.Filled.Description,
+        AssetType.Prefab => Icons.Material.Filled.Widgets,
         _ => Icons.Material.Filled.Image,
     };
 }

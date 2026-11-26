@@ -85,6 +85,9 @@ public sealed class AiRuntime : IAsyncDisposable
         : null;
 
     /// <summary>Chat slots for the settings: 1-4, and 1 on the CPU (slots help only when the GPU has spare compute).</summary>
+    /// <summary>The current app settings (AI tagging options such as the consensus thresholds).</summary>
+    public AppSettings Settings => _settings.Current;
+
     public static int ParallelOf(AppSettings s) => s.Acceleration == AiAcceleration.Cpu ? 1 : Math.Clamp(s.AiParallelRequests, 1, 4);
 
     /// <summary>(Re)starts the servers for the current settings; servers without a configured model stay off.</summary>

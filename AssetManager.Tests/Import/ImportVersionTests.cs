@@ -40,6 +40,7 @@ public class ImportVersionTests
         rock.Tags.Add(new AssetTag { Tag = favorite, Origin = TagOrigin.User });
         rock.Name = "Big Rock";
         rock.UserEdited |= EditedFields.Name;
+        (rock.Favorite, rock.Rating, rock.Notes) = (true, 4, "use for level 2 rocks");
         await db.SaveChangesAsync(ct);
         return (rock.SourceId, rock.Id);
     }
@@ -77,6 +78,7 @@ public class ImportVersionTests
         await using var kit = await ImportKit.CreateAsync();
         var (v1, v2) = Packages(kit.Catalog.Dir);
         var (oldSource, rockId) = await CatalogFirstVersionAsync(kit, v1);
+        await new SourceTagService(kit.Store).AddAsync(oldSource, ["low poly"], ct: ct);
         var (session, _) = await kit.ImportAsync(new ImportRequest([v2], Depth: AiDepth.None));
 
         var commit = await kit.Jobs.WaitAsync(await kit.Imports.ConfirmAsync(session, ct), ct);
@@ -94,9 +96,12 @@ public class ImportVersionTests
         var rock = assets.Single(a => a.Name == "Big Rock");
         Assert.Equal(rockId, rock.Id);                                         // updated in place
         Assert.Contains(rock.Tags, t => t.Tag.Name == "favorite" && t.Origin == TagOrigin.User);
+        Assert.Equal((true, 4, "use for level 2 rocks"), (rock.Favorite, rock.Rating, rock.Notes)); // user-owned fields kept
         Assert.Equal(48, rock.Image!.Width);                                  // the new version's content
         Assert.EndsWith("GKC 3.77c Asset Store.unitypackage", rock.PrimaryFile!.Location.Path);
         Assert.True(await db.Previews.AnyAsync(p => p.AssetId == rock.Id, ct));
+        // Spec "New assets inherit": the new version's assets carry the source tag.
+        Assert.All(assets, a => Assert.Contains(a.Tags, t => t.Tag.Name == "low poly"));
         Assert.Equal(0, await db.AllAssets.CountAsync(a => a.ImportSessionId != null, ct));
         Assert.Equal(0, await db.AllSources.CountAsync(s => s.ImportSessionId != null, ct));
     }

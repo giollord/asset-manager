@@ -54,8 +54,14 @@ namespace AssetManager.Data.Migrations
                     b.Property<bool>("EmbeddingDirty")
                         .HasColumnType("INTEGER");
 
+                    b.Property<bool>("Favorite")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("Font")
                         .HasColumnType("TEXT");
+
+                    b.Property<bool>("GridUncertain")
+                        .HasColumnType("INTEGER");
 
                     b.Property<bool>("HasLicenseOverride")
                         .HasColumnType("INTEGER");
@@ -88,6 +94,9 @@ namespace AssetManager.Data.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("Notes")
+                        .HasColumnType("TEXT");
+
                     b.Property<bool>("OrientationUncertain")
                         .HasColumnType("INTEGER");
 
@@ -100,6 +109,9 @@ namespace AssetManager.Data.Migrations
                     b.Property<int>("PreviewOptionsVersion")
                         .HasColumnType("INTEGER");
 
+                    b.Property<int>("Rating")
+                        .HasColumnType("INTEGER");
+
                     b.Property<long?>("ReplacesAssetId")
                         .HasColumnType("INTEGER");
 
@@ -109,6 +121,9 @@ namespace AssetManager.Data.Migrations
 
                     b.Property<long>("SourceId")
                         .HasColumnType("INTEGER");
+
+                    b.Property<string>("SpriteSheet")
+                        .HasColumnType("TEXT");
 
                     b.PrimitiveCollection<string>("Style")
                         .IsRequired()
@@ -158,9 +173,15 @@ namespace AssetManager.Data.Migrations
 
                     b.HasIndex("EmbeddingDirty");
 
+                    b.HasIndex("Favorite");
+
+                    b.HasIndex("GridUncertain");
+
                     b.HasIndex("ImportSessionId");
 
                     b.HasIndex("IsStored");
+
+                    b.HasIndex("Rating");
 
                     b.HasIndex("ScaleAnomaly");
 
@@ -222,6 +243,9 @@ namespace AssetManager.Data.Migrations
                     b.Property<string>("Material")
                         .HasColumnType("TEXT");
 
+                    b.Property<int>("Origin")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("RelativePath")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -269,6 +293,21 @@ namespace AssetManager.Data.Migrations
                     b.HasIndex("TagId");
 
                     b.ToTable("AssetTags");
+                });
+
+            modelBuilder.Entity("AssetManager.Core.Domain.AssetTagOptOut", b =>
+                {
+                    b.Property<long>("AssetId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("TagId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("AssetId", "TagId");
+
+                    b.HasIndex("TagId");
+
+                    b.ToTable("AssetTagOptOuts");
                 });
 
             modelBuilder.Entity("AssetManager.Core.Domain.Collection", b =>
@@ -336,8 +375,14 @@ namespace AssetManager.Data.Migrations
                     b.Property<string>("Instruction")
                         .HasColumnType("TEXT");
 
+                    b.Property<long?>("IntoSourceId")
+                        .HasColumnType("INTEGER");
+
                     b.Property<long?>("JobId")
                         .HasColumnType("INTEGER");
+
+                    b.PrimitiveCollection<string>("OnlyPaths")
+                        .HasColumnType("TEXT");
 
                     b.PrimitiveCollection<string>("SharedTags")
                         .IsRequired()
@@ -635,6 +680,25 @@ namespace AssetManager.Data.Migrations
                     b.ToTable("Sources");
                 });
 
+            modelBuilder.Entity("AssetManager.Core.Domain.SourceTag", b =>
+                {
+                    b.Property<long>("SourceId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("TagId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Origin")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("SourceId", "TagId");
+
+                    b.HasIndex("TagId");
+
+                    b.ToTable("SourceTags");
+                });
+
             modelBuilder.Entity("AssetManager.Core.Domain.StagedSkip", b =>
                 {
                     b.Property<long>("Id")
@@ -801,6 +865,21 @@ namespace AssetManager.Data.Migrations
                     b.Navigation("Tag");
                 });
 
+            modelBuilder.Entity("AssetManager.Core.Domain.AssetTagOptOut", b =>
+                {
+                    b.HasOne("AssetManager.Core.Domain.Asset", null)
+                        .WithMany()
+                        .HasForeignKey("AssetId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("AssetManager.Core.Domain.Tag", null)
+                        .WithMany()
+                        .HasForeignKey("TagId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("AssetManager.Core.Domain.JobItemError", b =>
                 {
                     b.HasOne("AssetManager.Core.Domain.Job", null)
@@ -827,6 +906,23 @@ namespace AssetManager.Data.Migrations
                         .OnDelete(DeleteBehavior.SetNull);
 
                     b.Navigation("ParentSource");
+                });
+
+            modelBuilder.Entity("AssetManager.Core.Domain.SourceTag", b =>
+                {
+                    b.HasOne("AssetManager.Core.Domain.Source", null)
+                        .WithMany()
+                        .HasForeignKey("SourceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("AssetManager.Core.Domain.Tag", "Tag")
+                        .WithMany()
+                        .HasForeignKey("TagId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Tag");
                 });
 
             modelBuilder.Entity("AssetManager.Core.Domain.StagedSkip", b =>

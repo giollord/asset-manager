@@ -9,6 +9,8 @@
 @inject ICatalogStatsService Stats
 @inject SourceService SourceData
 @inject MetadataEditService Edits
+@inject SourceTagService SourceTags
+@inject AssetManager.Core.Jobs.IJobQueue Jobs
 @inject DeletionService Deletion
 @inject AssetManager.Data.CatalogStore Catalog
 @inject AssetManager.Core.Platform.IShellService Shell
@@ -23,6 +25,20 @@
 
 <div style="display: flex; gap: 16px; align-items: flex-start">
     <MudPaper Outlined="true" Class="pa-3" Style="width: 380px; flex-shrink: 0; max-height: calc(100vh - 140px); overflow-y: auto" id="source-list">
+        <MudToggleGroup T="bool" Value="Audit is not null" ValueChanged="ShowAuditAsync" Size="Size.Small" Color="Color.Primary" Class="mb-2" Style="width: 100%">
+            <MudToggleItem T="bool" Value="false" id="source-tab-list">Sources</MudToggleItem>
+            <MudToggleItem T="bool" Value="true" id="source-tab-audit">License audit</MudToggleItem>
+        </MudToggleGroup>
+        @if (Audit is not null)
+        {
+            @AuditList
+        }
+        else
+        {
+        <MudButton Variant="Variant.Text" Size="Size.Small" StartIcon="@Icons.Material.Filled.Sync" OnClick="CheckForChangesAsync" Class="mb-1" id="sources-check"
+                   title="Rescans the imported sources whose drives are attached and scans the library folders for new packs. Nothing changes until you act on the results.">
+            Check for changes
+        </MudButton>
         <MudTextField T="string" @bind-Value="_filter" Immediate="true" Placeholder="Filter sources" Adornment="Adornment.Start"
                       AdornmentIcon="@Icons.Material.Filled.Search" Margin="Margin.Dense" Variant="Variant.Outlined" Class="mb-2" />
         @if (_sources is null)
@@ -49,10 +65,15 @@
                 }
             </MudList>
         }
+        }
     </MudPaper>
 
     <div style="flex: 1; min-width: 0">
-        @if (Id is null)
+        @if (Changes)
+        {
+            <SyncResults />
+        }
+        else if (Id is null)
         {
             <MudText Typo="Typo.body1" Class="mud-text-secondary mt-4">Select a source to see its details.</MudText>
         }
@@ -70,6 +91,8 @@
                     <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.GridView" OnClick="() => Nav.NavigateTo(BrowseHref(s.Id))" id="source-browse">
                         Show @Total.ToString("N0") assets
                     </MudButton>
+                    <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Sync" OnClick="RescanAsync" id="source-rescan"
+                               title="Checks this source's files for added, changed and removed files">Rescan</MudButton>
                     <MudButton Variant="Variant.Outlined" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete" OnClick="DeleteAsync" id="source-delete">Delete source</MudButton>
                 </MudStack>
 
@@ -126,6 +149,19 @@
                     <MudText Typo="Typo.subtitle2" Class="mt-3">Description</MudText>
                     <MudText Typo="Typo.body2" Class="selectable" Style="white-space: pre-wrap" id="source-description">@s.Description</MudText>
                 }
+
+                @* Source tags (spec "Source tags"): every asset of the source carries them with origin "source". *@
+                <MudText Typo="Typo.subtitle2" Class="mt-3">Source tags</MudText>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary" HtmlTag="div">
+                    Every asset of this source carries these tags, also assets added to it later. Removing one here removes it from the assets that got it from the source.
+                </MudText>
+                <div id="source-tags">
+                    <TagEditor Tags="_sourceTags" OnAdd="AddSourceTagAsync" OnRemove="RemoveSourceTagAsync" />
+                </div>
+                <MudButton Size="Size.Small" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.AutoAwesome" OnClick="SuggestSourceTagsAsync"
+                           id="source-suggest-tags" title="The AI looks at the tags and styles most of this source's assets share and adds the ones that fit the whole source">
+                    Suggest source tags
+                </MudButton>
 
                 <MudText Typo="Typo.subtitle2" Class="mt-3">License</MudText>
                 @if (_edit is null)
@@ -201,11 +237,23 @@
 @code {
     [Parameter] public long? Id { get; set; }
 
+    /// <summary>The license audit tab: "all" or one <see cref="LicenseProblem"/> (spec "License audit on the dashboard").</summary>
+    [SupplyParameterFromQuery(Name = "audit")] public string? Audit { get; set; }
+
+    /// <summary>Opens the source's license editor (from the audit list).</summary>
+    [SupplyParameterFromQuery(Name = "edit")] public bool EditLicense { get; set; }
+
+    /// <summary>Shows the rescan and library scan results (spec "Acting on rescan results").</summary>
+    [SupplyParameterFromQuery(Name = "changes")] public bool Changes { get; set; }
+
+    private IReadOnlyList<LicenseAuditProblem>? _audit;
+
     private IReadOnlyList<SourceCount>? _sources;
     private SourceDetails? _d;
     private EditModel? _edit;
     private string? _filter;
     private long? _loadedId;
+    private IReadOnlyList<TagView> _sourceTags = [];
 
     private sealed class EditModel
     {
@@ -232,19 +280,139 @@
 
     protected override async Task OnParametersSetAsync()
     {
+        if (Audit is not null && _audit is null) _audit = await Stats.LicenseAuditAsync();
         if (Id == _loadedId) return;
         _loadedId = Id;
         _edit = null;
         _d = null;
-        if (Id is { } id) _d = await SourceData.LoadAsync(id);
+        _sourceTags = [];
+        if (Id is { } id)
+        {
+            _d = await SourceData.LoadAsync(id);
+            await LoadSourceTagsAsync(id);
+            if (EditLicense && _d is not null) StartEdit();
+        }
     }
 
+    // ---- license audit ----
+
+    private LicenseProblem? AuditFilter => Enum.TryParse<LicenseProblem>(Audit, out var p) ? p : null;
+
+    private string AuditHref(string audit, long? source = null, bool edit = false) =>
+        $"sources{(source is { } id ? $"/{id}" : "")}?audit={audit}{(edit ? "&edit=true" : "")}";
+
+    private const string AllProblems = "all";
+
+    private string AuditKey => Audit ?? AllProblems;
+
+    private void FilterAudit(string? key) => Nav.NavigateTo(AuditHref(key ?? AllProblems, Id));
+
+    private string EmptyAuditText() =>
+        AuditFilter is { } f ? $"No license problems of this kind ({f.Label().ToLowerInvariant()})." : "No license problems.";
+
+    private void OpenFromAudit(long sourceId) => Nav.NavigateTo(AuditHref(Audit ?? "all", sourceId));
+
+    private void EditFromAudit(long sourceId) => Nav.NavigateTo(AuditHref(Audit ?? "all", sourceId, edit: true));
+
+    private void BrowseAudit(LicenseAuditSource s) => Nav.NavigateTo("browse?q=" + s.Query.ToToken());
+
+    private async Task ShowAuditAsync(bool show)
+    {
+        if (show) _audit = await Stats.LicenseAuditAsync();
+        Nav.NavigateTo(show ? AuditHref("all", Id) : Id is { } id ? $"sources/{id}" : "sources");
+    }
+
+    private RenderFragment AuditList => __builder =>
+    {
+        <MudChipSet T="string" SelectedValue="@AuditKey" SelectedValueChanged="FilterAudit" SelectionMode="SelectionMode.SingleSelection"
+                    Size="Size.Small" CheckMark="false" id="audit-filter">
+            <MudChip T="string" Value="AllProblems" Text="All problems" />
+            @foreach (var p in Enum.GetValues<LicenseProblem>())
+            {
+                <MudChip T="string" Value="@p.ToString()" Text="@p.Label()" title="@p.Explain()" />
+            }
+        </MudChipSet>
+        @if (_audit is null)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else
+        {
+            var shown = _audit.Where(p => AuditFilter is null || p.Problem == AuditFilter).ToList();
+            @if (shown.All(p => p.SourceCount == 0))
+            {
+                <MudText Typo="Typo.body2" Class="mud-text-secondary mt-2" id="audit-empty">@EmptyAuditText()</MudText>
+            }
+            @foreach (var problem in shown.Where(p => p.SourceCount > 0))
+            {
+                <MudText Typo="Typo.subtitle2" Class="mt-3 audit-problem" data-problem="@problem.Problem" title="@problem.Problem.Explain()">
+                    @problem.Label: @problem.SourceCount.ToString("N0") source@(problem.SourceCount == 1 ? "" : "s"), @problem.AssetCount.ToString("N0") asset@(problem.AssetCount == 1 ? "" : "s")
+                </MudText>
+                <MudList T="long" Dense="true">
+                    @foreach (var s in problem.Sources)
+                    {
+                        <MudListItem T="long" Class="audit-row" data-id="@s.SourceId" data-problem="@problem.Problem"
+                                     OnClick="() => OpenFromAudit(s.SourceId)">
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                <MudText Typo="Typo.body2" Class="audit-name" Style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap" title="@s.Name">@s.Name</MudText>
+                                <MudChip T="string" Size="Size.Small">@s.Assets.ToString("N0")</MudChip>
+                                <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" Class="audit-edit" title="Edit this source's license"
+                                               OnClick="() => EditFromAudit(s.SourceId)" />
+                                <MudIconButton Icon="@Icons.Material.Filled.GridView" Size="Size.Small" Class="audit-browse" title="Open the affected assets in Browse"
+                                               OnClick="() => BrowseAudit(s)" />
+                            </MudStack>
+                        </MudListItem>
+                    }
+                </MudList>
+            }
+        }
+    };
+
+    private async Task LoadSourceTagsAsync(long id) =>
+        _sourceTags = (await SourceTags.OfAsync(id)).Select(t => new TagView(t.Name, t.Origin)).ToList();
+
+    private Task AddSourceTagAsync(string tag) =>
+        Ui.RunAsync(() => SourceTags.AddAsync(_d!.Source.Id, [tag]), $"Every asset of \"{_d!.Source.DisplayName}\" now carries \"{tag}\".");
+
+    /// <summary>Spec "Manual run": the consensus step for this source as a background AI job.</summary>
+    private Task SuggestSourceTagsAsync() =>
+        Ui.RunAsync(() => Jobs.EnqueueAsync(AssetManager.AI.Import.ConsensusJob.JobType, $"Suggest source tags for {_d!.Source.DisplayName}",
+            new AssetManager.AI.Import.SourcesPayload([_d.Source.Id])), "Suggesting source tags…");
+
+    private Task RemoveSourceTagAsync(string tag) => Ui.RunAsync(() => SourceTags.RemoveAsync(_d!.Source.Id, [tag]));
+
     private void Select(long id) => Nav.NavigateTo($"sources/{id}");
+
+    public const string ChangesHref = "sources?changes=true";
+
+    /// <summary>Rescans all sources and scans the library folders; the results show in the changes view.</summary>
+    private async Task CheckForChangesAsync()
+    {
+        if (await Ui.RunAsync(async () =>
+            {
+                await Jobs.EnqueueAsync(AssetManager.Processing.Sync.RescanJob.JobType, "Rescan sources", new AssetManager.Processing.Sync.RescanPayload(null));
+                await Jobs.EnqueueAsync(AssetManager.Processing.Sync.LibraryScanJob.JobType, "Scan library folders", new AssetManager.Processing.Sync.LibraryScanPayload());
+            }))
+            Nav.NavigateTo(ChangesHref);
+    }
+
+    private async Task RescanAsync()
+    {
+        var s = _d!.Source;
+        if (await Ui.RunAsync(() => Jobs.EnqueueAsync(AssetManager.Processing.Sync.RescanJob.JobType, $"Rescan {s.DisplayName}",
+                new AssetManager.Processing.Sync.RescanPayload([s.Id]))) > 0)
+            Nav.NavigateTo(ChangesHref);
+    }
 
     private void OnCatalogChanged() => InvokeAsync(async () =>
     {
         _sources = await Stats.SourcesAsync();
-        if (Id is { } id) _d = await SourceData.LoadAsync(id);
+        if (Audit is not null) _audit = await Stats.LicenseAuditAsync();
+        if (Id is { } id)
+        {
+            _d = await SourceData.LoadAsync(id);
+            await LoadSourceTagsAsync(id);
+        }
         StateHasChanged();
     });
 

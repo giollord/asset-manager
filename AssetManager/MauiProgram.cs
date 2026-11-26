@@ -45,6 +45,8 @@ public static class MauiProgram
         builder.Services.AddSingleton<AssetManager.Core.Platform.IFolderPicker, Services.WindowsFolderPicker>();
         builder.Services.AddSingleton<AssetManager.Core.Platform.IShellService, Services.WindowsShellService>();
         builder.Services.AddSingleton<AssetManager.Core.Platform.IClipboardFileService, Services.WindowsClipboardFileService>();
+        builder.Services.AddSingleton<Services.WindowsDragOutService>();
+        builder.Services.AddSingleton<AssetManager.Core.Platform.IDragOutService>(sp => sp.GetRequiredService<Services.WindowsDragOutService>());
         builder.Services.AddSingleton<Services.WindowsWindowChrome>();
         builder.Services.AddSingleton<AssetManager.Core.Platform.IWindowChrome>(sp => sp.GetRequiredService<Services.WindowsWindowChrome>());
         builder.Services.AddAssetManager();

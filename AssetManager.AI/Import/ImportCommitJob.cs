@@ -42,9 +42,19 @@ public sealed class ImportCommitJob(CatalogStore catalog, IJobQueue jobs, Source
         int Depth(Source s) => s.ParentSourceId is { } parent && byId.TryGetValue(parent, out var ps) ? 1 + Depth(ps) : 0;
         int committedAssets = 0, excluded = 0, emptySources = 0, replaced = 0;
         var restore = new List<long>();
+        long? into;
+        await using (var db = catalog.CreateDbContext())
+            into = await db.ImportSessions.Where(s => s.Id == sessionId).Select(s => s.IntoSourceId).FirstOrDefaultAsync(ct);
         foreach (var source in sources.OrderByDescending(Depth).ThenBy(s => s.Id))
         {
             ct.ThrowIfCancellationRequested();
+            if (into is { } target && source.ParentSourceId is null && await MergeAsync(sessionId, source.Id, target, ct) is { } merged)
+            {
+                committedAssets += merged.Kept;
+                excluded += merged.Dropped;
+                p.Advance(1, source.DisplayName);
+                continue;
+            }
             if (source.ReplacesSourceId is { } oldId && source.ReplaceAccepted != false && await ReplaceAsync(sessionId, source.Id, oldId, restore, ct))
             {
                 replaced++;
@@ -95,8 +105,30 @@ public sealed class ImportCommitJob(CatalogStore catalog, IJobQueue jobs, Source
         if (!await db.Sources.AnyAsync(s => s.Id == oldId, ct)) return false;
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         restore.AddRange(await versions.ReplaceAsync(db, sessionId, stagedId, oldId, ct));
+        await SourceTagService.ApplyAsync(db, oldId, ct); // the new version's assets inherit the source tags
         await tx.CommitAsync(ct);
         return true;
+    }
+
+    /// <summary>
+    /// Files imported into an existing source (spec "Acting on rescan results"): the staged root's assets and nested
+    /// sources move to that source, which then gives the new assets its source tags. Null when the source is gone.
+    /// </summary>
+    private async Task<(int Kept, int Dropped)?> MergeAsync(long sessionId, long stagedId, long targetId, CancellationToken ct)
+    {
+        await using var db = catalog.CreateDbContext();
+        if (!await db.Sources.AnyAsync(s => s.Id == targetId, ct)) return null;
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var dropped = await db.AllAssets.Where(a => a.SourceId == stagedId && a.ImportSessionId == sessionId && !a.Included).ExecuteDeleteAsync(ct);
+        var kept = await db.AllAssets.Where(a => a.SourceId == stagedId && a.ImportSessionId == sessionId)
+            .ExecuteUpdateAsync(u => u.SetProperty(a => a.SourceId, targetId).SetProperty(a => a.ImportSessionId, (long?)null), ct);
+        await db.AllSources.Where(s => s.ParentSourceId == stagedId).ExecuteUpdateAsync(u => u.SetProperty(s => s.ParentSourceId, targetId), ct);
+        await db.StagedSkips.Where(s => s.SourceId == stagedId).ExecuteUpdateAsync(u => u.SetProperty(s => s.SourceId, targetId), ct);
+        await db.AllSources.Where(s => s.Id == stagedId).ExecuteDeleteAsync(ct);
+        await SourceTagService.ApplyAsync(db, targetId, ct);
+        await tx.CommitAsync(ct);
+        _log.LogInformation("Import {Session}: {Kept} new assets added to source {Source}", sessionId, kept, targetId);
+        return (kept, dropped);
     }
 
     /// <returns>Committed and dropped asset counts, and whether the source was dropped for being empty.</returns>
@@ -113,9 +145,12 @@ public sealed class ImportCommitJob(CatalogStore catalog, IJobQueue jobs, Source
         if (empty)
             await db.AllSources.Where(s => s.Id == sourceId).ExecuteDeleteAsync(ct);
         else
+        {
             await db.AllSources.Where(s => s.Id == sourceId).ExecuteUpdateAsync(u => u
                 .SetProperty(s => s.ImportSessionId, (long?)null)
                 .SetProperty(s => s.CommittedFromSessionId, sessionId), ct);
+            await SourceTagService.ApplyAsync(db, sourceId, ct); // files imported into an existing source
+        }
         await tx.CommitAsync(ct);
         return (kept, dropped, empty);
     }
