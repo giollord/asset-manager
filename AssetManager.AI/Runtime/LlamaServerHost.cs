@@ -44,7 +44,7 @@ public sealed class LlamaServerHost : IAsyncDisposable
     {
         Name = name;
         _log = logger ?? NullLogger.Instance;
-        BinRoot = binRoot ?? Path.Combine(AppContext.BaseDirectory, "llama");
+        BinRoot = binRoot ?? Path.Combine(AssetManager.Core.Settings.AppPaths.InstallFolder, "llama");
     }
 
     public string Name { get; }
@@ -105,7 +105,7 @@ public sealed class LlamaServerHost : IAsyncDisposable
             AiAcceleration.Gpu => ["vulkan"],
             AiAcceleration.Cpu => ["cpu"],
             _ => new[] { "vulkan", "cpu" },
-        }).Where(b => File.Exists(ServerExe(b))).ToList();
+        }).Where(b => File.Exists(ServerPath)).ToList();
         if (backends.Count == 0)
         {
             Set(AiServerState.Failed, $"llama-server was not found under {BinRoot}.");
@@ -133,25 +133,38 @@ public sealed class LlamaServerHost : IAsyncDisposable
     }
 
     /// <summary>Starts the server on one backend; returns null when healthy, else the reason.</summary>
-    private async Task<string?> TryBackendAsync(string backend, LlamaServerOptions o, CancellationToken ct)
+    /// <summary>
+    /// The llama-server command line for one backend ("vulkan" or "cpu"). Model loading keeps llama.cpp's default
+    /// (memory-mapped): measured fastest from a slow USB drive, alone and with other reads competing (design D7).
+    /// </summary>
+    public static List<string> BuildArguments(string backend, LlamaServerOptions o, int port)
     {
-        var port = FreePort();
         var args = new List<string> { "-m", o.ModelPath, "--host", "127.0.0.1", "--port", port.ToString(), "-c", (o.ContextSize * Math.Max(1, o.Parallel)).ToString(),
             "--no-webui", "--offline", "-np", Math.Max(1, o.Parallel).ToString(), "--no-kv-unified", "-ngl", backend == "cpu" ? "0" : "999" };
+        // One llama.cpp build (the Vulkan one, which also carries the CPU backends) serves both modes; CPU mode skips the
+        // GPU entirely (design D4).
+        if (backend == "cpu") args.AddRange(["--device", "none"]);
         if (o.Embedding) args.AddRange(["--embedding", "--pooling", "mean"]);
         else
         {
             if (!string.IsNullOrWhiteSpace(o.MmprojPath) && File.Exists(o.MmprojPath)) args.AddRange(["--mmproj", o.MmprojPath]);
             args.AddRange(["--jinja", "--reasoning", "off"]); // direct structured answers, no thinking
         }
+        return args;
+    }
 
-        var psi = new ProcessStartInfo(ServerExe(backend))
+    private async Task<string?> TryBackendAsync(string backend, LlamaServerOptions o, CancellationToken ct)
+    {
+        var port = FreePort();
+        var args = BuildArguments(backend, o, port);
+
+        var psi = new ProcessStartInfo(ServerPath)
         {
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardError = true,
             RedirectStandardOutput = true,
-            WorkingDirectory = Path.GetDirectoryName(ServerExe(backend))!,
+            WorkingDirectory = Path.GetDirectoryName(ServerPath)!,
         };
         foreach (var a in args) psi.ArgumentList.Add(a);
 
@@ -161,6 +174,8 @@ public sealed class LlamaServerHost : IAsyncDisposable
         process.OutputDataReceived += (_, e) => Capture(e.Data);
         process.Start();
         JobObject.Assign(process);
+        // Normal I/O priority on purpose: at low priority Windows reads the memory-mapped model in 4 KB pieces, which
+        // never finishes on a busy USB hard drive. The start order keeps it off the first page's reads (design D5).
         process.BeginErrorReadLine();
         process.BeginOutputReadLine();
         _log.LogInformation("Starting AI server {Name} ({Backend}) on port {Port}: {Model}", Name, backend, port, Path.GetFileName(o.ModelPath));
@@ -289,7 +304,7 @@ public sealed class LlamaServerHost : IAsyncDisposable
         lock (_tail) return string.Join(" | ", _tail.TakeLast(6));
     }
 
-    private string ServerExe(string backend) => Path.Combine(BinRoot, backend, OperatingSystem.IsWindows() ? "llama-server.exe" : "llama-server");
+    private string ServerPath => Path.Combine(BinRoot, OperatingSystem.IsWindows() ? "llama-server.exe" : "llama-server");
 
     private static void Kill(Process p)
     {

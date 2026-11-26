@@ -17,6 +17,41 @@ public class LlamaServerHostTests
         Assert.Contains("not found", host.Error);
     }
 
+    /// <summary>Design D4/D7: GPU and CPU flags on the one server build; model loading left at llama.cpp's mmap default.</summary>
+    [Fact]
+    public void Server_arguments()
+    {
+        var chat = new LlamaServerOptions(@"C:\m\chat.gguf", null, AiAcceleration.Auto, false, 8192, 3);
+        var gpu = LlamaServerHost.BuildArguments("vulkan", chat, 5000);
+        var cpu = LlamaServerHost.BuildArguments("cpu", chat with { Parallel = 1 }, 5000);
+
+        Assert.Equal("999", gpu[gpu.IndexOf("-ngl") + 1]);
+        Assert.DoesNotContain("--device", gpu);
+        Assert.Equal("24576", gpu[gpu.IndexOf("-c") + 1]); // context per slot x 3 slots
+        Assert.Equal("0", cpu[cpu.IndexOf("-ngl") + 1]);
+        Assert.Equal("none", cpu[cpu.IndexOf("--device") + 1]);
+        foreach (var args in new[] { gpu, cpu })
+        {
+            Assert.DoesNotContain("--no-mmap", args);
+            Assert.DoesNotContain("--load-mode", args);
+            Assert.DoesNotContain("-lm", args);
+        }
+    }
+
+    /// <summary>Design D4: one llama.cpp build serves both GPU and CPU mode.</summary>
+    [Theory]
+    [InlineData(AiAcceleration.Gpu, "vulkan")]
+    [InlineData(AiAcceleration.Cpu, "cpu")]
+    public async Task One_server_build_runs_on_gpu_and_cpu(AiAcceleration acceleration, string backend)
+    {
+        Assert.SkipWhen(AiModelFactAttribute.Embed is null, "Set ASSETMANAGER_AI_EMBED to an embedding GGUF to run.");
+        await using var host = new LlamaServerHost("embedding");
+        await host.StartAsync(new LlamaServerOptions(AiModelFactAttribute.Embed!, null, acceleration, true, 2048), TestContext.Current.CancellationToken);
+
+        Assert.Equal(AiServerState.Ready, host.State);
+        Assert.Equal(backend, host.Backend);
+    }
+
     [Fact]
     public async Task Runtime_without_model_reports_not_configured()
     {

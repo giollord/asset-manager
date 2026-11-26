@@ -7,9 +7,11 @@ namespace AssetManager.AI.Enrichment;
 
 /// <summary>
 /// Keeps embeddings current in the background: after catalog changes (debounced) and when the embedding server
-/// becomes ready, dirty assets are re-embedded. Runs after the vector index is initialized.
+/// becomes ready, dirty assets are re-embedded (loading the embedding model if needed, design D16). Runs after the
+/// vector index is initialized, and not before the window shows its first page.
 /// </summary>
-public sealed class EmbeddingRefresher(CatalogStore catalog, AiRuntime runtime, EmbeddingService embeddings, ILogger<EmbeddingRefresher> logger)
+public sealed class EmbeddingRefresher(CatalogStore catalog, AiRuntime runtime, EmbeddingService embeddings, ILogger<EmbeddingRefresher> logger,
+    StartupSignals? signals = null)
     : IStartupTask, IDisposable
 {
     private static readonly TimeSpan Debounce = TimeSpan.FromSeconds(2);
@@ -49,6 +51,7 @@ public sealed class EmbeddingRefresher(CatalogStore catalog, AiRuntime runtime, 
         if (catalog.Path is null || !embeddings.IsAvailable) return;
         try
         {
+            if (signals is not null) await signals.WaitForWindowAsync(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(60));
             await embeddings.RefreshDirtyAsync();
         }
         catch (Exception e)

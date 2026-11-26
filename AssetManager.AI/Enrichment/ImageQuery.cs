@@ -68,12 +68,16 @@ public sealed class ImageQueryService(EmbeddingService embeddings, ImageQueryCac
 
     public Func<AiModalities> Modalities { get; init; } = () => runtime?.Chat.Modalities ?? new AiModalities(false, false);
 
-    /// <summary>Both the chat model (with vision) and the embedding model are needed.</summary>
-    public bool IsAvailable => Chat() is not null && Modalities().Vision && embeddings.IsAvailable;
+    /// <summary>
+    /// Both the chat model (with vision) and the embedding model are needed; they may not be loaded yet, since models
+    /// load when first needed (design D16).
+    /// </summary>
+    public bool IsAvailable => (runtime is { } r ? r.VisionAvailable : Chat() is not null && Modalities().Vision) && embeddings.IsAvailable;
 
     /// <summary>Describes and embeds the image, keeps it in the cache and returns it.</summary>
     public async Task<ImageQuery> CreateAsync(byte[] imageBytes, CancellationToken ct = default)
     {
+        if (runtime is not null && Chat() is null) await runtime.EnsureChatAsync(ct);
         if (Chat() is not { } chat || !Modalities().Vision || !embeddings.IsAvailable)
             throw new InvalidOperationException("Search by image needs the AI model with vision and the embedding model (Settings → AI model).");
 

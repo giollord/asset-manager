@@ -1,10 +1,13 @@
 @using System.ComponentModel.DataAnnotations
 @using AssetManager.Core.Domain
 @using AssetManager.Processing.Settings
+@using AssetManager.Core.Platform
 @inject IAppSettingsStore Settings
 @inject ClassificationSettings Classification
 @inject UiActions Ui
 @inject ISnackbar Snackbar
+@inject IFolderPicker Folders
+@inject AssetManager.Processing.Cache.ExtractionCache Cache
 
 @* Import defaults, the extraction cache and file classification (spec "Settings"). *@
 <MudPaper Class="pa-4" Outlined="true" id="import-settings">
@@ -32,6 +35,17 @@
                              Label="Remove cached files unused for (days)" HelperText="Default 14 days." Margin="Margin.Dense" id="cache-age" />
         </MudItem>
     </MudGrid>
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-2" Wrap="Wrap.Wrap">
+        <MudText Typo="Typo.body2">Extraction cache folder: <b class="selectable" id="cache-folder">@AppPaths.CacheFor(Settings.Current)</b></MudText>
+        <MudButton Size="Size.Small" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Folder" OnClick="PickCacheFolderAsync" id="cache-folder-change">Change</MudButton>
+        @if (Settings.Current.CacheFolder is not null)
+        {
+            <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="() => Settings.Update(s => s.CacheFolder = null)" id="cache-folder-default">Use default</MudButton>
+        }
+    </MudStack>
+    <MudText Typo="Typo.caption" Class="mud-text-secondary">
+        Keep it on a fast internal drive: importing archives writes many small files. Changes apply after a restart@(AppPaths.CacheFor(Settings.Current) != Cache.Root ? $" (in use now: {Cache.Root})" : "").
+    </MudText>
 
     <MudText Typo="Typo.subtitle2" Class="mt-4">File classification</MudText>
     <MudText Typo="Typo.caption" Class="mud-text-secondary">
@@ -58,9 +72,18 @@
     /// <summary>The section's title and setting names, for the Settings search (design D8).</summary>
     public static readonly string[] SearchTerms =
     [
-        Title, "Default AI depth", "Maximum nesting depth", "Extraction cache limit (GB)", "Remove cached files unused for (days)",
+        Title, "Default AI depth", "Maximum nesting depth", "Extraction cache limit (GB)", "Remove cached files unused for (days)", "Extraction cache folder",
         "File classification", "Script and project extensions", "Ignored extensions", "Ignored folders (one per line)",
     ];
+
+    private async Task PickCacheFolderAsync()
+    {
+        try
+        {
+            if (await Folders.PickFolderAsync() is { } folder) Settings.Update(s => s.CacheFolder = folder);
+        }
+        catch (PlatformFeatureNotSupportedException e) { Snackbar.Add(e.Message, Severity.Warning); }
+    }
 
     private ClassificationOptions _saved = new();
     private string _scripts = "", _ignored = "", _folders = "";

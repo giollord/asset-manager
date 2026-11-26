@@ -12,7 +12,7 @@
         <MudText Typo="Typo.h6">@Title</MudText>
         <MudSpacer />
         <MudChip T="string" id="ai-status" Color="StatusColor" Variant="Variant.Text" Icon="@StatusIcon">@Runtime.StatusText</MudChip>
-        <MudTooltip Text="Restart the AI servers">
+        <MudTooltip Text="Load (or restart) the AI models now">
             <MudIconButton Icon="@Icons.Material.Filled.RestartAlt" Size="Size.Small" OnClick="RestartAsync" aria-label="Restart AI" />
         </MudTooltip>
     </MudStack>
@@ -26,6 +26,13 @@
             <MudIconButton Icon="@Icons.Material.Filled.Clear" Size="Size.Small" Disabled="f.Value is null" OnClick="() => Clear(f.Role)" aria-label="@($"Clear {f.Label}")" />
         </MudStack>
     }
+
+    <MudSwitch T="bool" Value="Settings.Current.AiLoadAtStartup" ValueChanged="v => Settings.Update(s => s.AiLoadAtStartup = v)" Color="Color.Primary"
+               Label="Load AI models at startup" id="ai-load-at-startup" Class="mb-0" />
+    <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mb-2">
+        Off: the models load when first needed (an AI import step, search by meaning or by image), which takes a few seconds to a minute.
+        On: they load right after the window opens, so AI features respond at once.
+    </MudText>
 
     <MudRadioGroup T="AiAcceleration" Value="Settings.Current.Acceleration" ValueChanged="SetAcceleration" Class="mb-2">
         <MudText Typo="Typo.subtitle2" Class="mr-3 d-inline">Acceleration</MudText>
@@ -94,7 +101,7 @@
     public static readonly string[] SearchTerms =
     [
         Title, "Chat model (GGUF)", "Vision projector (mmproj GGUF)", "Embedding model (GGUF)", "Acceleration",
-        "Auto (GPU, else CPU)", "GPU (Vulkan)", "CPU", "Requests at once", "Recommended models", .. AiTaggingSettings.SearchTerms,
+        "Auto (GPU, else CPU)", "GPU (Vulkan)", "CPU", "Requests at once", "Load AI models at startup", "Recommended models", .. AiTaggingSettings.SearchTerms,
     ];
 
     private sealed record Field(ModelRole Role, string Id, string Label, string? Value, string Helper);

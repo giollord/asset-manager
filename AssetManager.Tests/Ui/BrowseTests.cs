@@ -34,7 +34,7 @@ public class BrowseTests : BunitContext
         Services.AddSingleton(ImageQueries);
         Services.AddSingleton(new CatalogSearch(c.Store, words, new EmbeddingService(c.Store, index, () => null), index, ImageQueries));
         Services.AddSingleton(new ImageQueryService(new EmbeddingService(c.Store, index, () => null), ImageQueries));
-        Services.AddSingleton<ICatalogStatsService>(new CatalogStatsService(c.Store, words));
+        Services.AddSingleton<ICatalogStatsService>(new CatalogStatsService(c.Store, words) { ComputeOnThreadPool = false });
         Services.AddSingleton(new PreviewQueries(c.Store));
         Services.AddSingleton(new AssetManager.Processing.Settings.PreviewSettings(c.Store));
         Services.AddScoped<PreviewCache>();

@@ -17,14 +17,28 @@ public sealed record EmbeddingModel(IEmbeddingGenerator<string, Embedding<float>
 /// index dimension (Matryoshka) and normalized, and stores them through <see cref="IVectorIndex"/>. Assets are
 /// re-embedded when the catalog marks them dirty (see <c>EmbeddingDirtyInterceptor</c>) or the model changes.
 /// </summary>
-public sealed class EmbeddingService(CatalogStore catalog, IVectorIndex index, Func<EmbeddingModel?> model, ILogger<EmbeddingService>? logger = null)
+/// <param name="model">The running embedding model, or null.</param>
+/// <param name="configured">Whether a model is set up (it may not be loaded yet); default: <paramref name="model"/> is not null.</param>
+/// <param name="ensureLoaded">Loads the configured model when it is not running (models load when first needed, design D16).</param>
+public sealed class EmbeddingService(CatalogStore catalog, IVectorIndex index, Func<EmbeddingModel?> model, ILogger<EmbeddingService>? logger = null,
+    Func<bool>? configured = null, Func<CancellationToken, Task>? ensureLoaded = null)
 {
     private readonly ILogger _log = logger ?? (ILogger)NullLogger.Instance;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     public int Dimensions { get; init; } = SqliteVecIndex.DefaultDimensions;
 
-    public bool IsAvailable => model() is not null;
+    /// <summary>Semantic features can be offered: a model runs or is configured and loads on first use.</summary>
+    public bool IsAvailable => model() is not null || configured?.Invoke() == true;
+
+    /// <summary>The running model, loading the configured one first if needed.</summary>
+    private async Task<EmbeddingModel?> ModelAsync(CancellationToken ct)
+    {
+        if (model() is { } running) return running;
+        if (ensureLoaded is null || configured?.Invoke() != true) return null;
+        await ensureLoaded(ct);
+        return model();
+    }
 
     public static string DocumentText(Asset asset, IEnumerable<string> tags)
     {
@@ -36,18 +50,18 @@ public sealed class EmbeddingService(CatalogStore catalog, IVectorIndex index, F
 
     public static string QueryText(string query) => $"task: search result | query: {query.Trim()}";
 
-    /// <summary>Embeds a search query; null when no embedding model is running.</summary>
+    /// <summary>Embeds a search query, loading the model first if needed; null without an embedding model.</summary>
     public async Task<float[]?> EmbedQueryAsync(string query, CancellationToken ct = default)
     {
-        if (model() is not { } m || string.IsNullOrWhiteSpace(query)) return null;
+        if (string.IsNullOrWhiteSpace(query) || await ModelAsync(ct) is not { } m) return null;
         var result = await m.Generator.GenerateAsync([QueryText(query)], cancellationToken: ct);
         return Fit(result[0].Vector.Span);
     }
 
-    /// <summary>Embeds a document-style text (e.g. a described query image); null when no embedding model is running.</summary>
+    /// <summary>Embeds a document-style text (e.g. a described query image), loading the model first if needed.</summary>
     public async Task<float[]?> EmbedDocumentAsync(string text, CancellationToken ct = default)
     {
-        if (model() is not { } m || string.IsNullOrWhiteSpace(text)) return null;
+        if (string.IsNullOrWhiteSpace(text) || await ModelAsync(ct) is not { } m) return null;
         var result = await m.Generator.GenerateAsync([text], cancellationToken: ct);
         return Fit(result[0].Vector.Span);
     }
@@ -55,7 +69,15 @@ public sealed class EmbeddingService(CatalogStore catalog, IVectorIndex index, F
     /// <summary>Re-embeds every dirty committed asset (and those embedded with another model); returns how many.</summary>
     public async Task<int> RefreshDirtyAsync(int batchSize = 32, IProgress<int>? progress = null, CancellationToken ct = default)
     {
-        if (model() is null) return 0;
+        if (model() is null)
+        {
+            // Not loaded: load it only when there is something to embed (design D16). Assets embedded with another
+            // model are re-embedded the next time the model runs.
+            if (configured?.Invoke() != true) return 0;
+            await using (var db = catalog.CreateDbContext())
+                if (!await db.Assets.AnyAsync(a => a.EmbeddingDirty, ct)) return 0;
+            if (await ModelAsync(ct) is null) return 0;
+        }
         await _gate.WaitAsync(ct);
         try
         {

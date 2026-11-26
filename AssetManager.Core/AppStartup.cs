@@ -20,9 +20,13 @@ public sealed class AppStartup(IEnumerable<IStartupTask> tasks, ILogger<AppStart
 
     public Exception? Error { get; private set; }
 
+    /// <summary>
+    /// Starts the tasks once, on the thread pool: they open the catalog and run SQLite queries, which execute
+    /// synchronously even when awaited, so on the UI thread a slow drive would keep the window frozen (design D13).
+    /// </summary>
     public Task EnsureStartedAsync()
     {
-        lock (_lock) return _run ??= RunAllAsync();
+        lock (_lock) return _run ??= Task.Run(RunAllAsync);
     }
 
     private async Task RunAllAsync()

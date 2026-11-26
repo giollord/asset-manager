@@ -25,7 +25,7 @@ public class CollectionsPageTests : BunitContext
         Services.AddMudServices();
         Services.AddSingleton(c.Store);
         Services.AddSingleton(search);
-        Services.AddSingleton<ICatalogStatsService>(new CatalogStatsService(c.Store, search));
+        Services.AddSingleton<ICatalogStatsService>(new CatalogStatsService(c.Store, search) { ComputeOnThreadPool = false });
         Services.AddSingleton(new CollectionService(c.Store));
         Services.AddSingleton(new PreviewQueries(c.Store));
         Services.AddScoped<PreviewCache>();

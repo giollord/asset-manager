@@ -10,7 +10,8 @@
             <b>@Job.Title</b>
         </MudText>
         <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="StateColor" Class="job-state">@StateText</MudChip>
-        @if (Job.IsActive && !Compact)
+        @* Negative ids are activities that are not queued jobs (loading AI models): nothing to cancel. *@
+        @if (Job.IsActive && !Compact && Job.Id > 0)
         {
             <MudTooltip Text="Cancel">
                 <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="CancelAsync" aria-label="Cancel job" />
@@ -31,14 +32,14 @@
             @Job.Stage
             @if (Job.Total > 0) { <span> · @Job.Done.ToString("N0") / @Job.Total.ToString("N0") (@((Job.StageFraction ?? 0).ToString("P0")))</span> }
         </MudText>
-        @if (!Compact && Job.State == JobState.Running && !string.IsNullOrEmpty(Job.CurrentItem))
+        @if (Job.State == JobState.Running && !string.IsNullOrEmpty(Job.CurrentItem))
         {
             <MudText Typo="Typo.caption" Class="d-block job-item selectable" Style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">@Job.CurrentItem</MudText>
         }
     }
 
     <MudText Typo="Typo.caption" Class="d-block job-times mud-text-secondary">
-        @if (Job.StartedAt is not null) { <span>Elapsed @Duration(Job.Elapsed(DateTime.UtcNow))</span> }
+        @if (Job.StartedAt is not null && Job.State != JobState.Pending) { <span>Elapsed @Duration(Job.Elapsed(DateTime.UtcNow))</span> }
         @if (Job.State == JobState.Running && Job.EtaSeconds is { } eta) { <span> · about @Duration(TimeSpan.FromSeconds(eta)) left</span> }
         @if (Job.Warnings > 0) { <span> · @Job.Warnings warning@(Job.Warnings == 1 ? "" : "s")</span> }
         @if (Job.Errors > 0) { <span class="mud-error-text"> · @Job.Errors error@(Job.Errors == 1 ? "" : "s")</span> }

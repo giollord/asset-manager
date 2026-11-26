@@ -2,6 +2,7 @@
 @implements IDisposable
 @inject IAppSettingsStore Settings
 @inject AppStartup Startup
+@inject StartupSignals StartupSignals
 @inject AssetManager.Core.Platform.FileDropBroker Drops
 @inject AssetManager.Core.Platform.DragOutState DragOutState
 @inject NavigationManager Nav
@@ -76,6 +77,8 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        // The catalog is on screen: interrupted jobs and the AI runtime may now start (design D12).
+        if (_started) StartupSignals.SignalWindowReady();
         if (firstRender && _themeProvider is not null)
         {
             _systemDark = await _themeProvider.GetSystemDarkModeAsync();

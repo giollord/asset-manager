@@ -20,7 +20,7 @@ public class DashboardTests : BunitContext
         var search = new AssetSearchService(c.Store);
         Services.AddMudServices();
         Services.AddSingleton(c.Store);
-        Services.AddSingleton<ICatalogStatsService>(new CatalogStatsService(c.Store, search));
+        Services.AddSingleton<ICatalogStatsService>(new CatalogStatsService(c.Store, search) { ComputeOnThreadPool = false });
         JSInterop.Mode = JSRuntimeMode.Loose;
 
         var page = Render<Dashboard>();
@@ -47,7 +47,7 @@ public class DashboardTests : BunitContext
         await TestData.SourceAsync(c, 5, s => { s.DisplayName = "Clean"; s.License = new LicenseInfo { Kind = "CC0", Commercial = TriState.Yes, Attribution = TriState.No }; });
         Services.AddMudServices();
         Services.AddSingleton(c.Store);
-        Services.AddSingleton<ICatalogStatsService>(new CatalogStatsService(c.Store, new AssetSearchService(c.Store)));
+        Services.AddSingleton<ICatalogStatsService>(new CatalogStatsService(c.Store, new AssetSearchService(c.Store)) { ComputeOnThreadPool = false });
         JSInterop.Mode = JSRuntimeMode.Loose;
 
         var page = Render<Dashboard>();

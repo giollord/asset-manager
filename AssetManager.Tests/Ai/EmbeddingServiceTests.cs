@@ -54,6 +54,44 @@ public class EmbeddingServiceTests
         return await db.AllAssets.Where(a => a.Id == id).Select(a => a.EmbeddingDirty).SingleAsync();
     }
 
+    /// <summary>Design D16: the model loads on the first query, and the refresh loads it only when there is work.</summary>
+    [Fact]
+    public async Task Model_loads_when_first_needed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var c = await TestCatalog.CreateAsync();
+        var generator = new FakeEmbeddingGenerator();
+        EmbeddingModel? loaded = null;
+        var loads = 0;
+        var service = new EmbeddingService(c.Store, new InMemoryVectorIndex(c.Store), () => loaded, configured: () => true,
+            ensureLoaded: _ => { loads++; loaded = new EmbeddingModel(generator, "fake-v1"); return Task.CompletedTask; });
+
+        Assert.True(service.IsAvailable); // offered before it is loaded
+        Assert.Equal(0, await service.RefreshDirtyAsync(ct: ct)); // nothing to embed: stays unloaded
+        Assert.Equal(0, loads);
+
+        Assert.NotNull(await service.EmbedQueryAsync("crate", ct));
+        Assert.Equal(1, loads);
+        Assert.NotNull(await service.EmbedQueryAsync("barrel", ct));
+        Assert.Equal(1, loads); // already running
+    }
+
+    [Fact]
+    public async Task Dirty_assets_load_the_model_for_the_refresh()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var c = await TestCatalog.CreateAsync();
+        var generator = new FakeEmbeddingGenerator();
+        EmbeddingModel? loaded = null;
+        var service = new EmbeddingService(c.Store, new InMemoryVectorIndex(c.Store), () => loaded, configured: () => true,
+            ensureLoaded: _ => { loaded = new EmbeddingModel(generator, "fake-v1"); return Task.CompletedTask; });
+        var id = await AddAssetAsync(c, "Crate", "A wooden crate.");
+
+        Assert.Equal(1, await service.RefreshDirtyAsync(ct: ct));
+        Assert.NotNull(loaded);
+        Assert.False(await DirtyAsync(c, id));
+    }
+
     [Fact]
     public async Task Embedding_refresh_after_description_edit()
     {

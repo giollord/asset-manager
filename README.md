@@ -23,7 +23,21 @@ The screenshots show free CC0 packs by [Kenney](https://kenney.nl).
 
 Get `AssetManager-<version>-win-x64-portable.zip` from the [Releases](https://github.com/giollord/asset-manager/releases) page, extract it anywhere (a local folder, a USB stick, the external drive that holds your assets), and run `AssetManager.exe`. Nothing needs to be installed: the package includes .NET, the Windows App SDK, the AI runtime and FFmpeg; only the WebView2 runtime that ships with Windows 10 and 11 is used from the system. The app keeps all its data in the `data` folder next to it (see [Data folder](#data-folder)). The AI models are not included; download them in Settings → AI model.
 
-The app works fully offline. It goes online only in two cases, both started by you: downloading an AI model in Settings → AI model, and the update check in Settings → About. The update check is off by default. When turned on, it asks GitHub once a day at startup (or when you press "Check now") for the latest release, sending nothing but the request itself, and shows "x.y.z available" with a link to the release page. It never downloads or installs anything; to update, extract the new zip to a new folder and move the old `data` folder into it.
+The extracted folder holds only a few entries:
+
+| Entry | What it is |
+|---|---|
+| `AssetManager.exe` | The app with .NET and the Windows App SDK in one file |
+| `wwwroot.zip` | The app's styles, scripts and fonts |
+| `portable` | Marks the folder as portable: data goes to `data` next to the exe |
+| `llama/` | The AI runtime (`llama-server`, Vulkan build; it also runs on CPU) |
+| `ffmpeg/` | FFmpeg for audio and video previews |
+| `licenses/`, `LICENSE.txt` | License texts |
+| `data/` | Created on first start: catalog, settings, models, cache, logs |
+
+On its first start, the exe unpacks its runtime once into `%TEMP%\.net\AssetManager` on the system drive (about 240 MB; older versions' copies are removed by the app); later starts load it from there, so the app starts quickly even from a slow USB drive. The AI models are not loaded at startup: they load the first time something needs them (an AI step of an import, search by meaning or by image), which the jobs panel shows as "Loading AI models". Settings → AI model can load them at startup instead. Models load faster from an internal SSD: to keep them there, pick the model files in Settings → AI model from any folder instead of the `models` folder in `data`.
+
+The app works fully offline. It goes online only in two cases, both started by you: downloading an AI model in Settings → AI model, and the update check in Settings → About. The update check is off by default. When turned on, it asks GitHub once a day at startup (or when you press "Check now") for the latest release, sending nothing but the request itself, and shows "x.y.z available" with a link to the release page. It never downloads or installs anything. To update, extract the new zip to a new folder and move the old `data` folder into it, or replace everything in the old folder except `data`.
 
 ## Building from source
 
@@ -66,7 +80,7 @@ Test classes that start a real model server belong to the non-parallel `AiModelC
 
 ## Data folder
 
-Everything the app creates lives in one data folder: the default catalog (`catalog.amdb`), `settings.json`, catalog backups (`backups`), downloaded AI models (`models`), the extraction cache (`cache`), temporary files (`temp`), logs (`logs`) and the embedded browser profile (`webview`). Settings → About shows the folder in use, the mode and an "Open folder" button.
+Everything the app keeps lives in one data folder: the default catalog (`catalog.amdb`), `settings.json`, catalog backups (`backups`), downloaded AI models (`models`), temporary files (`temp`), logs (`logs`) and the embedded browser profile (`webview`). The extraction cache (files unpacked from archives and packages while importing) is disposable and lives on the system drive, in `%LOCALAPPDATA%\AssetManager\cache`, even for a portable copy: unpacking writes thousands of small files, which an internal SSD handles instantly and a USB hard drive at about 10 per second. It is limited to 4 GB by default (Settings → Import): after each extraction, the least recently used entries above the limit are removed. Settings → Import can also move it. Settings → About shows the folder in use, the mode and an "Open folder" button.
 
 | Mode | When | Data folder |
 |---|---|---|
@@ -89,8 +103,8 @@ To go back to a backup, choose "Restore" next to it in Settings → Backups. Run
 
 [`.github/workflows/build.yml`](.github/workflows/build.yml) runs on GitHub Actions (`windows-latest`):
 
-- **Every push and pull request to `master`** (and manual runs from the Actions tab): run the test suite with the pinned SDK. A failing test fails the run. Nothing is packaged.
-- **A version tag** runs the tests, then builds the portable package (with the MAUI workload), checks its contents (the app's `LICENSE.txt`, the AI runtime and FFmpeg with their licenses, no `.gguf` models) and that `AssetManager.exe` reports the tag's version, and publishes a GitHub Release with `AssetManager-<version>-win-x64-portable.zip`. Nothing is released if a test or the package check fails:
+- **Every pull request to `master`** (and manual runs from the Actions tab): run the test suite with the pinned SDK. A failing test fails the run. Nothing is packaged. Pushes to `master` (including merges) do not start a run.
+- **A version tag** runs the tests, then builds the portable package (with the MAUI workload), checks its contents with [`tools/check-package.ps1`](tools/check-package.ps1) (the compact layout above, the app's `LICENSE.txt`, the AI runtime and FFmpeg with their licenses, no `.gguf` models or debug symbols) and that `AssetManager.exe` reports the tag's version, and publishes a GitHub Release with `AssetManager-<version>-win-x64-portable.zip`. Nothing is released if a test or the package check fails:
 
   ```powershell
   git tag v1.2.0
@@ -201,7 +215,7 @@ It serves the same UI at `http://localhost:5022` and uses the same catalog and s
 | Component | Version | License | How it is included |
 |---|---|---|---|
 | [FFmpeg](https://ffmpeg.org) (LGPL shared build from [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds)) | 8.1 | LGPL 2.1+ | Downloaded at build time, SHA-256 pinned in `AssetManager.Processing.csproj`, copied to `ffmpeg/` beside the app with its `FFMPEG.LICENSE.txt`. The DLLs are loaded dynamically, unmodified, by the separate `ffmpeg.exe`/`ffprobe.exe` processes. |
-| [llama.cpp](https://github.com/ggml-org/llama.cpp) `llama-server` (Vulkan and CPU builds) | b12141 | MIT | Downloaded at build time, SHA-256 pinned in `AssetManager.AI.csproj`, copied to `llama/vulkan` and `llama/cpu`. Its MIT license (from the same tag; the release zips do not include it) is checked in under `AssetManager.AI/licenses` and copied to `llama/LICENSE.txt`. |
+| [llama.cpp](https://github.com/ggml-org/llama.cpp) `llama-server` (Vulkan build, which also carries the CPU backends) | b12141 | MIT | Downloaded at build time, SHA-256 pinned in `AssetManager.AI.csproj`, copied to `llama/`. CPU mode runs the same server without the GPU. Its MIT license (from the same tag; the release zips do not include it) is checked in under `AssetManager.AI/licenses` and copied to `llama/LICENSE.txt`. |
 | [Assimp](https://github.com/assimp/assimp) through the AssimpNetter NuGet package | 6.x | BSD 3-Clause | NuGet package with the native library. |
 | [ImageMagick](https://imagemagick.org) through Magick.NET | Q8 x64 | ImageMagick License (Apache 2.0 style) | NuGet package with the native library. |
 | [sqlite-vec](https://github.com/asg017/sqlite-vec) `vec0.dll` | 0.1.9 | MIT | Checked in under `AssetManager.Data/native/win-x64` with its license. |

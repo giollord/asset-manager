@@ -6,15 +6,19 @@ Defines how the app is built, tested and packaged for users: automated builds on
 ## Requirements
 
 ### Requirement: Automated build and tests
-Every push and pull request to `master` SHALL run the automated tests on Windows in GitHub Actions, and SHALL NOT build the portable package. The run SHALL fail when the code does not compile or any test fails. Tests that need locally installed AI models SHALL be skipped, not failed, in that environment.
+Every pull request to `master` SHALL run the automated tests on Windows in GitHub Actions, and SHALL NOT build the portable package. Pushes to `master` SHALL NOT start a run; the tests already ran on the pull request. The run SHALL fail when the code does not compile or any test fails. Tests that need locally installed AI models SHALL be skipped, not failed, in that environment.
 
 #### Scenario: Broken change
 - **WHEN** a pull request makes a test fail
 - **THEN** the workflow run for that pull request fails and names the failing test
 
 #### Scenario: Passing change
-- **WHEN** a push to `master` compiles and every test passes or is skipped
+- **WHEN** a pull request compiles and every test passes or is skipped
 - **THEN** the workflow run succeeds without producing a package
+
+#### Scenario: Merge to master
+- **WHEN** a pull request is merged, or a commit is pushed to `master` directly
+- **THEN** no workflow run starts
 
 ### Requirement: Portable Windows package
 For a version tag, the workflow SHALL produce a portable package for Windows x64: one zip that, once extracted to any folder, runs `AssetManager.exe` without installing .NET, the Windows App SDK or anything else beyond the WebView2 runtime included in Windows 10 and 11. The package SHALL include the app's own MIT license as `LICENSE.txt`, and the AI runtime, FFmpeg and other native components with their license files. It SHALL NOT include AI model files. The package check SHALL fail when the app's license file is missing.
@@ -81,3 +85,29 @@ The README SHALL show a few screenshots of the app below its introduction and ab
 #### Scenario: README on GitHub
 - **WHEN** someone opens the repository page on GitHub
 - **THEN** the README shows the logo, then the introduction, then the screenshots, all rendered from files in the repository
+
+### Requirement: Compact package layout
+The portable package SHALL contain one `AssetManager.exe` holding the app, the .NET runtime and the Windows UI runtime, with the app's web content as one archive beside it. Beside the exe SHALL be only `portable`, `LICENSE.txt`, the `llama/`, `ffmpeg/` and `licenses/` (third-party license texts) folders, and at most 5 other files. It SHALL NOT contain locale folders, debug symbols or packaged-app tile images. The package check SHALL fail otherwise.
+
+#### Scenario: Top level of the extracted zip
+- **WHEN** the zip of a tagged release is extracted and its top level is listed
+- **THEN** it shows `AssetManager.exe`, `portable`, `LICENSE.txt`, `llama`, `ffmpeg`, `licenses` and no more than 5 other files, and no other folders
+
+#### Scenario: Extra folder fails the check
+- **WHEN** a build change makes the publish output contain a locale folder such as `de-DE`
+- **THEN** the package check fails and names the unexpected entry
+
+#### Scenario: Compact package still runs
+- **WHEN** the compact package is extracted on a clean Windows 10 or 11 x64 machine and `AssetManager.exe` is started
+- **THEN** the app opens with its full UI (styles, icons, 3D viewer) and can import a folder of images, as before
+
+### Requirement: Window shown before AI models load
+When the app is started, it SHALL show its main window and its first page's data before any AI model loads. Loading models SHALL NOT delay the window. When "Load AI models at startup" is on, the models SHALL load after the first page shows its data, and the AI status SHALL show that they are starting until they are ready.
+
+#### Scenario: Start from an external drive
+- **WHEN** the portable folder, including its models, is on a slow external drive, "Load AI models at startup" is on, and the app is started with the OS file cache cold
+- **THEN** the main window and the Dashboard's numbers appear before the models start loading, and the AI status shows "starting" until they are ready
+
+#### Scenario: Pending AI work at start
+- **WHEN** the app is started while enrichment jobs are pending
+- **THEN** the window appears first, and the jobs load the chat model when they reach an AI step and then continue

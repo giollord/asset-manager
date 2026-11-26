@@ -9,7 +9,7 @@ public static class Ffmpeg
 {
     private static readonly Lazy<string?> Folder = new(() =>
     {
-        var bundled = Path.Combine(AppContext.BaseDirectory, "ffmpeg");
+        var bundled = Path.Combine(AssetManager.Core.Settings.AppPaths.InstallFolder, "ffmpeg");
         return File.Exists(Path.Combine(bundled, "ffprobe.exe")) || File.Exists(Path.Combine(bundled, "ffprobe")) ? bundled : null;
     });
 

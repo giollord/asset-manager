@@ -6,10 +6,10 @@
              x:Class="AssetManager.MainPage"
              BackgroundColor="{DynamicResource PageBackgroundColor}">
 
-    <BlazorWebView x:Name="blazorWebView" HostPage="wwwroot/index.html">
-        <BlazorWebView.RootComponents>
+    <local:AppBlazorWebView x:Name="blazorWebView" HostPage="wwwroot/index.html">
+        <local:AppBlazorWebView.RootComponents>
             <RootComponent Selector="#app" ComponentType="{x:Type shared:Routes}" />
-        </BlazorWebView.RootComponents>
-    </BlazorWebView>
+        </local:AppBlazorWebView.RootComponents>
+    </local:AppBlazorWebView>
 
 </ContentPage>

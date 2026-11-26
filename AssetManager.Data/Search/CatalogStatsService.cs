@@ -81,6 +81,13 @@ public sealed class CatalogStatsService : ICatalogStatsService
         lock (_gate) (_stats, _collections, _sources, _tags, _audit) = (null, null, null, null, null);
     }
 
+    /// <summary>
+    /// Computes on the thread pool (the default): these queries scan the catalog, and SQLite runs synchronously even
+    /// when awaited, so on the UI thread a slow drive would freeze the window (design D13). Component tests turn it off
+    /// to keep rendering deterministic.
+    /// </summary>
+    public bool ComputeOnThreadPool { get; init; } = true;
+
     public Task<CatalogStats> GetAsync(CancellationToken ct = default) => Cached(ref _stats, () => ComputeAsync(CancellationToken.None));
 
     public Task<IReadOnlyList<CollectionCount>> CollectionsAsync(CancellationToken ct = default) => Cached(ref _collections, () => ComputeCollectionsAsync(CancellationToken.None));
@@ -115,7 +122,7 @@ public sealed class CatalogStatsService : ICatalogStatsService
         lock (_gate)
         {
             // A failed computation is not cached.
-            if (slot is null || slot.IsFaulted || slot.IsCanceled) slot = compute();
+            if (slot is null || slot.IsFaulted || slot.IsCanceled) slot = ComputeOnThreadPool ? Task.Run(compute) : compute();
             return slot;
         }
     }

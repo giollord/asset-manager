@@ -106,6 +106,12 @@ public class TextureJudgeTests
         Assert.Equal(4, first.Contents.OfType<DataContent>().Count()); // the model as it is + 3 candidates
         Assert.Contains("Candidate 1: Textures/Tree_Bark.jpg", first.Text);
         Assert.Contains("Candidate 1: Textures/Color Variations/Bark_Dead.png", chat.Requests[1].Messages.Last().Text); // reversed
+
+        // Design D8: the text before the model's own lines is the same for every model, so the server reuses it.
+        var fixedPart = first.Text[..(first.Text.IndexOf(TextureJudge.FixedEnd, StringComparison.Ordinal) + TextureJudge.FixedEnd.Length)];
+        Assert.StartsWith(fixedPart, chat.Requests[1].Messages.Last().Text);
+        Assert.DoesNotContain("Bark", fixedPart);
+        Assert.DoesNotContain("Tree", fixedPart);
     }
 
     /// <summary>Scenario "Atlas shared by a pack": one candidate for a missing reference; no second question is needed.</summary>

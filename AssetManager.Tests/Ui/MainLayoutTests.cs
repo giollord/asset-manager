@@ -42,6 +42,7 @@ public class MainLayoutTests : BunitContext
         Services.AddSingleton(new AssetManager.Core.Updates.UpdateChecker(settings));
         Services.AddSingleton<IShellService>(new NoShell());
         Services.AddSingleton(new AppStartup([], NullLogger<AppStartup>.Instance));
+        Services.AddSingleton(new StartupSignals());
         Services.AddSingleton<FileDropBroker>();
         Services.AddSingleton<DragOutState>();
         Services.AddSingleton<IProgressHub>(new ProgressHub());

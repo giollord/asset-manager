@@ -85,14 +85,23 @@ public class JobUiTests : BunitContext
     [Fact]
     public void Indicator_shows_active_count_and_disappears_when_done()
     {
-        Render<MudBlazor.MudPopoverProvider>();
+        var popovers = Render<MudBlazor.MudPopoverProvider>();
         var cut = Render<JobsIndicator>();
         // Spec "Idle app bar": no indicator and no jobs button while nothing runs.
         Assert.Empty(cut.Markup.Trim());
 
         _hub.Publish(Job(1, JobState.Running, stage: "Scan", done: 1, total: 4));
         _hub.Publish(Job(2, JobState.Pending));
-        cut.WaitForAssertion(() => Assert.Contains("2", cut.Find(".mud-badge").TextContent));
+        cut.WaitForAssertion(() => Assert.Equal("2 jobs · 25%", cut.Find("#jobs-indicator").TextContent.Trim()));
+
+        // Hovering opens the quick view, which names the file being processed.
+        _hub.Publish(Job(1, JobState.Running, stage: "Scan", done: 1, total: 4) with { CurrentItem = "PNG/ship.png" });
+        cut.Find("#jobs-indicator").Closest("div.d-inline-block")!.TriggerEvent("onmouseenter", new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+        popovers.WaitForAssertion(() => Assert.Contains("PNG/ship.png", popovers.Find("#jobs-quick-view").TextContent));
+
+        // Clicking the chip opens the Jobs page.
+        cut.Find("#jobs-indicator").Click();
+        Assert.EndsWith("/jobs", Services.GetRequiredService<Microsoft.AspNetCore.Components.NavigationManager>().Uri);
 
         _hub.Finish(Job(1, JobState.Completed));
         _hub.Finish(Job(2, JobState.Completed));

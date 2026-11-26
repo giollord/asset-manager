@@ -49,7 +49,7 @@
   <Target Name="IncludeFfmpeg" BeforeTargets="AssignTargetPaths" DependsOnTargets="FetchFfmpeg">
     <ItemGroup>
       <_FfmpegOut Include="$(FfmpegDir)*" />
-      <None Include="@(_FfmpegOut)" Link="ffmpeg/%(_FfmpegOut.Filename)%(_FfmpegOut.Extension)" CopyToOutputDirectory="PreserveNewest" />
+      <None Include="@(_FfmpegOut)" Link="ffmpeg/%(_FfmpegOut.Filename)%(_FfmpegOut.Extension)" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     </ItemGroup>
   </Target>
 

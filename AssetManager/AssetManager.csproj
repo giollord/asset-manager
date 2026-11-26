@@ -73,15 +73,48 @@
     <PublishReadyToRun>false</PublishReadyToRun>
     <PublishTrimmed>false</PublishTrimmed>
     <CopyOutputSymbolsToPublishDirectory>false</CopyOutputSymbolsToPublishDirectory>
+    <!-- Compact package (spec "Compact package layout", design D1/D3): one exe instead of ~800 files. Native libraries
+         are extracted once to %TEMP%\.net on first start; uncompressed so starting does not unpack the bundle. -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>false</EnableCompressionInSingleFile>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <DebugType>none</DebugType>
   </PropertyGroup>
 
-  <ItemGroup Condition="'$(Portable)' == 'true'">
-    <None Include="Packaging\portable" Link="portable" CopyToOutputDirectory="Never" CopyToPublishDirectory="Always" />
-  </ItemGroup>
+  <!--
+    Left out of the portable package (design D3): the tile and logo images MAUI generates for an MSIX package (only
+    appicon.ico is used unpackaged), and Windows ML's ONNX Runtime/DirectML, which the app never calls (~40 MB).
+  -->
+  <Target Name="TrimPortablePackage" AfterTargets="ComputeResolvedFilesToPublishList" Condition="'$(Portable)' == 'true'">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
+                             Condition="($([System.String]::Copy('%(ResolvedFileToPublish.Filename)').StartsWith('appicon')) And '%(ResolvedFileToPublish.Extension)' == '.png') Or '%(ResolvedFileToPublish.Filename)%(ResolvedFileToPublish.Extension)' == 'onnxruntime.dll' Or '%(ResolvedFileToPublish.Filename)%(ResolvedFileToPublish.Extension)' == 'DirectML.dll'" />
+    </ItemGroup>
+  </Target>
+
+  <!--
+    After publish (spec "Compact package layout"):
+    - the "portable" marker is copied here, because the MSIX tooling that single-file publishing needs drops this extension-less item;
+    - the web content becomes one wwwroot.zip, served by AppBlazorWebView (design D2). Static web assets are copied by
+      their own publish step, outside the single-file bundle, so they are zipped afterwards. The pre-compressed
+      .br/.gz copies are left out: the web view reads local content, compression gains nothing.
+  -->
+  <Target Name="FinishPortablePackage" AfterTargets="Publish" Condition="'$(Portable)' == 'true'">
+    <Copy SourceFiles="Packaging\portable" DestinationFolder="$(PublishDir)" />
+    <ItemGroup>
+      <_PrecompressedWebContent Include="$(PublishDir)wwwroot\**\*.br;$(PublishDir)wwwroot\**\*.gz" />
+    </ItemGroup>
+    <Delete Files="@(_PrecompressedWebContent)" />
+    <ZipDirectory SourceDirectory="$(PublishDir)wwwroot" DestinationFile="$(PublishDir)wwwroot.zip" Overwrite="true" />
+    <RemoveDir Directories="$(PublishDir)wwwroot" />
+    <!-- The bundle carries its own copy (it is extracted next to the app). -->
+    <Delete Files="$(PublishDir)$(AssemblyName).staticwebassets.endpoints.json" />
+  </Target>
 
   <!-- The app's own MIT license, shipped next to the exe (spec "Portable Windows package"). -->
   <ItemGroup>
-    <None Include="..\LICENSE" Link="LICENSE.txt" CopyToOutputDirectory="Never" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\LICENSE" Link="LICENSE.txt" CopyToOutputDirectory="Never" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>
 
   <ItemGroup>
