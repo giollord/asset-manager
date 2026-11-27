@@ -39,6 +39,28 @@ public sealed class CatalogStore : IDbContextFactory<CatalogDbContext>
 
     public void NotifyContentChanged() => ContentChanged?.Invoke();
 
+    private readonly SemaphoreSlim _writeGate = new(1, 1);
+
+    /// <summary>
+    /// Takes the in-process write turn; dispose the result to release it. Parallel workers that each save in their own
+    /// transaction take it around the save: SQLite's busy handler is not fair, so with many writers one can keep losing
+    /// the lock past the busy timeout ("database is locked"), worst on a slow (USB) drive. The gate queues them instead.
+    /// </summary>
+    public async Task<IDisposable> AcquireWriteAsync(CancellationToken ct = default)
+    {
+        await _writeGate.WaitAsync(ct);
+        return new WriteTurn(_writeGate);
+    }
+
+    private sealed class WriteTurn(SemaphoreSlim gate) : IDisposable
+    {
+        private int _released;
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _released, 1) == 0) gate.Release();
+        }
+    }
+
     public CatalogDbContext CreateDbContext() =>
         new(_options ?? throw new InvalidOperationException("No catalog is open."));
 
