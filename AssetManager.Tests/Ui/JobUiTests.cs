@@ -57,6 +57,19 @@ public class JobUiTests : BunitContext
     }
 
     [Fact]
+    public void Scan_with_a_total_shows_its_count_and_moves_the_overall_percentage()
+    {
+        // Spec "Import scan counts files processed out of total": 600 of 2,000 files in stage 1 of 6.
+        var scan = Render<JobProgressView>(p => p.Add(x => x.Job, Job(5, JobState.Running, stage: "Scanning", stageIndex: 0, stageCount: 6, done: 600, total: 2000)));
+
+        var stage = scan.Find(".job-stage").TextContent;
+        Assert.Contains($"600 / {2000:N0}", stage);
+        Assert.Contains((0.3).ToString("P0"), stage);
+        Assert.DoesNotContain("indeterminate", scan.Find(".mud-progress-linear").ClassName);
+        Assert.Equal((0.05).ToString("P0"), scan.Find(".job-state").TextContent.Trim());
+    }
+
+    [Fact]
     public void Progress_view_shows_stage_counts_item_eta_and_retry()
     {
         var running = Render<JobProgressView>(p => p.Add(x => x.Job, Job(7, JobState.Running, stage: "AI item pass", stageIndex: 4, stageCount: 6, done: 40, total: 120)));

@@ -42,6 +42,35 @@ public static class FolderReader
     }
 }
 
+/// <summary>
+/// A folder listed once by <see cref="VirtualFileSystem.List"/>: what the walk visits, and the top-level files it
+/// treats as files, so their number is known before the walk starts.
+/// </summary>
+public sealed class FolderListing
+{
+    internal FolderListing(string folder, FolderIgnoreRules ignore, IReadOnlyList<(string RelativePath, FileInfo? File, string? IgnoredBy)> entries,
+        IReadOnlyList<string> files)
+    {
+        Folder = folder;
+        Ignore = ignore;
+        Entries = entries;
+        Files = files;
+    }
+
+    public string Folder { get; }
+
+    public FolderIgnoreRules Ignore { get; }
+
+    /// <summary>Files and ignored folders as <see cref="FolderReader.Walk"/> returned them, sorted.</summary>
+    internal IReadOnlyList<(string RelativePath, FileInfo? File, string? IgnoredBy)> Entries { get; }
+
+    /// <summary>
+    /// Folder-relative paths of the files the walk visits as files: plain files and the archives and packages it opens.
+    /// Ignored folders and archives an ignore rule keeps closed are not included.
+    /// </summary>
+    public IReadOnlyList<string> Files { get; }
+}
+
 public enum VfsNodeKind
 {
     /// <summary>A folder skipped by an ignore rule (<see cref="VfsNode.Error"/> holds the rule); nothing below it is visited.</summary>
@@ -86,6 +115,49 @@ public sealed class VirtualFileSystem(IEnumerable<IContainerReader> readers, IAp
 
     public IContainerReader? ReaderFor(string fileName) => _readers.FirstOrDefault(r => r.CanRead(fileName));
 
+    /// <summary>
+    /// Lists a folder once, so a caller can count its files before walking it with
+    /// <see cref="WalkAsync(FolderListing, Location, int?, CancellationToken, Action{Location}?)"/>.
+    /// </summary>
+    /// <param name="ignore">Folders to skip; null skips none.</param>
+    public FolderListing List(string folder, FolderIgnoreRules? ignore = null)
+    {
+        ignore ??= FolderIgnoreRules.None;
+        List<(string RelativePath, FileInfo? File, string? IgnoredBy)> entries = [.. FolderReader.Walk(folder, ignore)];
+        var files = entries.Where(e => e.File is not null && !KeptClosed(e.File.Name, e.RelativePath, ignore)).Select(e => e.RelativePath).ToList();
+        return new FolderListing(folder, ignore, entries, files);
+    }
+
+    /// <summary>An archive or package counts as a folder: a rule naming it keeps it closed.</summary>
+    private bool KeptClosed(string fileName, string relativePath, FolderIgnoreRules ignore) =>
+        ReaderFor(fileName) is not null && ignore.Match(relativePath) is not null;
+
+    /// <summary>Walks a folder from a listing made by <see cref="List"/>, without listing it again.</summary>
+    /// <param name="location">The folder's catalog location (volume-relative).</param>
+    public async IAsyncEnumerable<VfsNode> WalkAsync(FolderListing listing, Location location, int? maxDepth = null,
+        [EnumeratorCancellation] CancellationToken ct = default, Action<Location>? opening = null)
+    {
+        var depth = Math.Max(0, maxDepth ?? settings?.Current.MaxNestingDepth ?? 5);
+        var ignore = listing.Ignore;
+        foreach (var (rel, file, rule) in listing.Entries)
+        {
+            ct.ThrowIfCancellationRequested();
+            var loc = new Location(location.VolumeId, Path.Combine(location.Path, rel), location.Inner);
+            if (file is null)
+            {
+                yield return new VfsNode(VfsNodeKind.IgnoredFolder, loc, Path.Combine(listing.Folder, rel), rel, 0, null) { Error = rule };
+                continue;
+            }
+            if (ReaderFor(file.Name) is not null && ignore.Match(rel) is { } containerRule)
+            {
+                yield return new VfsNode(VfsNodeKind.IgnoredFolder, loc, file.FullName, rel, file.Length, file.LastWriteTimeUtc) { Error = containerRule };
+                continue;
+            }
+            var node = new VfsNode(VfsNodeKind.File, loc, file.FullName, rel, file.Length, file.LastWriteTimeUtc);
+            await foreach (var n in VisitAsync(node, depth, ignore, opening, ct)) yield return n;
+        }
+    }
+
     /// <param name="localPath">The folder or file on disk.</param>
     /// <param name="location">Its catalog location (volume-relative).</param>
     /// <param name="maxDepth">How many container levels may be opened; null uses the settings value.</param>
@@ -98,24 +170,7 @@ public sealed class VirtualFileSystem(IEnumerable<IContainerReader> readers, IAp
         ignore ??= FolderIgnoreRules.None;
         if (Directory.Exists(localPath))
         {
-            foreach (var (rel, file, rule) in FolderReader.Walk(localPath, ignore))
-            {
-                ct.ThrowIfCancellationRequested();
-                var loc = new Location(location.VolumeId, Path.Combine(location.Path, rel), location.Inner);
-                if (file is null)
-                {
-                    yield return new VfsNode(VfsNodeKind.IgnoredFolder, loc, Path.Combine(localPath, rel), rel, 0, null) { Error = rule };
-                    continue;
-                }
-                // An archive or package counts as a folder: a rule naming it keeps it closed.
-                if (ReaderFor(file.Name) is not null && ignore.Match(rel) is { } containerRule)
-                {
-                    yield return new VfsNode(VfsNodeKind.IgnoredFolder, loc, file.FullName, rel, file.Length, file.LastWriteTimeUtc) { Error = containerRule };
-                    continue;
-                }
-                var node = new VfsNode(VfsNodeKind.File, loc, file.FullName, rel, file.Length, file.LastWriteTimeUtc);
-                await foreach (var n in VisitAsync(node, depth, ignore, opening, ct)) yield return n;
-            }
+            await foreach (var n in WalkAsync(List(localPath, ignore), location, depth, ct, opening)) yield return n;
             yield break;
         }
 

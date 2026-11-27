@@ -127,15 +127,37 @@ public sealed class ImportStager(
                 intoName = await db.Sources.Where(s => s.Id == into).Select(s => s.DisplayName).FirstOrDefaultAsync(ct)
                     ?? throw new InvalidOperationException("The source to import into no longer exists.");
 
+        // Spec "Import scan counts files processed out of total": every input is listed first, so the total covers all
+        // of them from the start. Only files outside archives count; an archive or package is one file.
         progress.SetStage("Scanning", StageScan, stageCount);
-        long filesFound = 0, importable = 0;
+        progress.SetCurrentItem("Listing files...");
+        var inputs = new List<(string Full, FolderListing? Listing)>();
+        long total = 0;
         foreach (var input in session.Inputs)
         {
+            ct.ThrowIfCancellationRequested();
             var full = Path.GetFullPath(input);
+            if (Directory.Exists(full))
+            {
+                var listing = vfs.List(full, ignore);
+                total += only is null ? listing.Files.Count : listing.Files.Count(f => only.Contains(OnlyKey(f)));
+                inputs.Add((full, listing));
+            }
+            else
+            {
+                if (File.Exists(full) && (only is null || only.Contains(OnlyKey(Path.GetFileName(full))))) total++;
+                inputs.Add((full, null));
+            }
+        }
+        progress.SetTotal(total);
+
+        long filesFound = 0, importable = 0, done = 0;
+        foreach (var (full, listing) in inputs)
+        {
             var location = volumes.FromPath(full);
             volumeIds.Add(location.VolumeId);
             Source? root = null;
-            if (Directory.Exists(full))
+            if (listing is not null)
             {
                 root = NewSource(SourceKind.Folder, location, intoName ?? Path.GetFileName(full.TrimEnd('\\', '/')), sessionId, null);
                 sources[location.ToString()] = root;
@@ -147,11 +169,37 @@ public sealed class ImportStager(
                 continue;
             }
 
-            await foreach (var node in vfs.WalkAsync(full, location, ignore: ignore, ct: ct,
-                               opening: loc => progress.SetContainer(ContainerLabel(loc))))
+            // A top-level file or archive counts as done once the next one starts (or the walk ends), so an archive is
+            // done only after all of its contents have been scanned. An archive starts when it starts to open: its
+            // node only arrives after the extraction.
+            string? topLevel = null;
+            void StartTopLevel(Location loc)
+            {
+                var key = loc.ToString();
+                if (key == topLevel) return;
+                if (topLevel is not null)
+                {
+                    progress.Advance(1);
+                    done++;
+                }
+                topLevel = key;
+            }
+            void Opening(Location loc)
+            {
+                var relative = listing is not null ? Path.GetRelativePath(location.Path, loc.Path) : loc.FileName;
+                if (!loc.IsInContainer && (only is null || only.Contains(OnlyKey(relative)))) StartTopLevel(loc);
+                progress.SetContainer(ContainerLabel(loc));
+                progress.SetCurrentItem(null); // the last file shown is not inside the container being opened
+            }
+            var walk = listing is not null
+                ? vfs.WalkAsync(listing, location, ct: ct, opening: Opening)
+                : vfs.WalkAsync(full, location, ignore: ignore, ct: ct, opening: Opening);
+            await foreach (var node in walk)
             {
                 ct.ThrowIfCancellationRequested();
                 if (!Wanted(node)) continue;
+                if (!node.Location.IsInContainer && node.Kind is VfsNodeKind.File or VfsNodeKind.Container or VfsNodeKind.ContainerError)
+                    StartTopLevel(node.Location);
                 var parentKey = node.Location.Container?.ToString();
                 var parent = parentKey is not null ? sources.GetValueOrDefault(parentKey) : root;
                 switch (node.Kind)
@@ -210,12 +258,19 @@ public sealed class ImportStager(
                                 Skip(parent, node.RelativePath, SkipKind.Ignored, c.Reason ?? "ignored", node.Location);
                                 break;
                         }
-                        progress.Advance(1, node.RelativePath);
+                        progress.SetCurrentItem(node.RelativePath);
                         break;
                     }
                 }
             }
+            if (topLevel is not null)
+            {
+                progress.Advance(1);
+                done++;
+            }
         }
+        // A listed file that vanished before the walk reached it: the stage still ends at its total.
+        if (done < total) progress.Advance(total - done);
         await volumes.RememberAsync(volumeIds, ct);
 
         progress.SetContainer(null);

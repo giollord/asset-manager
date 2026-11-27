@@ -107,6 +107,47 @@ public class UnityPackageAndVfsTests
         Assert.True(openPackage < events.FindIndex(e => e.StartsWith($"node:{zip} → Unity/props.unitypackage → ")));
     }
 
+    /// <summary>A folder with plain files, an open zip, an ignored folder and a zip kept closed by a rule.</summary>
+    private static string MixedFolder(ProcessingKit kit)
+    {
+        var root = Path.Combine(kit.Dir.Path, "mixed");
+        kit.Dir.Write("mixed/a.png", "A");
+        kit.Dir.Write("mixed/Sub/b.wav", "B");
+        kit.Dir.Write("mixed/Pack.zip", FixtureBuilder.Zip(FixtureFile.Text("inner/c.txt", "C"), FixtureFile.Text("d.txt", "D")));
+        kit.Dir.Write("mixed/node_modules/x.png", "X");
+        kit.Dir.Write("mixed/Old.zip", FixtureBuilder.Zip(FixtureFile.Text("e.txt", "E")));
+        return root;
+    }
+
+    [Fact]
+    public void Listing_counts_the_top_level_files_the_walk_visits()
+    {
+        using var kit = new ProcessingKit();
+        var root = MixedFolder(kit);
+
+        var listing = kit.Vfs.List(root, new FolderIgnoreRules(["node_modules", "Old.zip"]));
+
+        // Spec "Import scan counts files processed out of total": the ignored folder and the closed zip are left out.
+        Assert.Equal(["a.png", "Pack.zip", @"Sub\b.wav"], listing.Files.Order(StringComparer.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Walking_a_listing_yields_the_same_nodes_as_walking_the_folder()
+    {
+        using var kit = new ProcessingKit();
+        var root = MixedFolder(kit);
+        var ignore = new FolderIgnoreRules(["node_modules", "Old.zip"]);
+
+        var fromPath = new List<string>();
+        await foreach (var n in kit.Vfs.WalkAsync(root, new(null, root), ignore: ignore)) fromPath.Add($"{n.Kind}:{n.Location.Display()}");
+        var fromListing = new List<string>();
+        await foreach (var n in kit.Vfs.WalkAsync(kit.Vfs.List(root, ignore), new(null, root))) fromListing.Add($"{n.Kind}:{n.Location.Display()}");
+
+        Assert.Equal(fromPath, fromListing);
+        Assert.Contains(fromListing, e => e.StartsWith("File:") && e.EndsWith("inner/c.txt"));
+        Assert.Equal(2, fromListing.Count(e => e.StartsWith("IgnoredFolder:")));
+    }
+
     [Fact]
     public async Task Depth_limit_stops_recursion()
     {

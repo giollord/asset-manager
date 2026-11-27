@@ -76,24 +76,54 @@ public class ImportStagingTests
         Assert.Contains("\"assets\":3", job.SummaryJson);
     }
 
-    /// <summary>Records the container in effect at every advance, and the last value of each count.</summary>
+    /// <summary>
+    /// Records, during the scan stage, each current item with the container and done count in effect, every advance and
+    /// total, and the last value of each count.
+    /// </summary>
     private sealed class RecordingProgress : IJobProgress
     {
         public string? Container;
-        public List<(string? Item, string? Container)> Advances { get; } = [];
+        public List<(string? Item, string? Container, long Done)> Items { get; } = [];
         public List<string?> Containers { get; } = [];
         public Dictionary<string, long> Counts { get; } = [];
         public List<string> CountOrder { get; } = [];
         public string? Stage;
+        public long Total, Done;
 
-        public void SetStage(string name, int index, int count, long total = 0) => Stage = name;
-        public void SetTotal(long total) { }
-        public void Advance(long count = 1, string? currentItem = null) { if (Stage == "Scanning") Advances.Add((currentItem, Container)); }
-        public void SetCurrentItem(string? item) { }
+        /// <summary>The scan's advances and totals in order: ("total", n) or ("advance", n).</summary>
+        public List<(string Kind, long Value)> ScanEvents { get; } = [];
+
+        private bool Scanning => Stage == "Scanning";
+
+        public void SetStage(string name, int index, int count, long total = 0)
+        {
+            Stage = name;
+            if (Scanning) ScanEvents.Add(("total", Total = total));
+        }
+
+        public void SetTotal(long total) { if (Scanning) ScanEvents.Add(("total", Total = total)); }
+
+        public void Advance(long count = 1, string? currentItem = null)
+        {
+            if (!Scanning) return;
+            Done += count;
+            ScanEvents.Add(("advance", count));
+            if (currentItem is not null) Items.Add((currentItem, Container, Done));
+        }
+
+        public void SetCurrentItem(string? item) { if (Scanning) Items.Add((item, Container, Done)); }
         public void Warn(string itemRef, string? itemName, string reason) { }
         public void Fail(string itemRef, string? itemName, string reason) { }
         public void SetSummary(object summary) { }
-        public void SetContainer(string? container) { Container = container; Containers.Add(container); }
+        public void SetContainer(string? container)
+        {
+            Container = container;
+            Containers.Add(container);
+            if (Scanning && container is not null) Opened.Add((container, Done));
+        }
+
+        /// <summary>Each container named during the scan with the done count at that moment.</summary>
+        public List<(string Container, long Done)> Opened { get; } = [];
         public void SetCount(string label, long value) { if (Counts.TryAdd(label, value)) CountOrder.Add(label); else Counts[label] = value; }
     }
 
@@ -109,8 +139,10 @@ public class ImportStagingTests
         await kit.Stager.ScanAndGroupAsync(session.Id, progress, 6, ct);
 
         // Spec "Current archive shown while working inside it": the zip's file carries the zip, plain files none.
-        Assert.Equal("Sounds.zip", progress.Advances.Single(a => a.Item == "Sfx/beep.wav").Container);
-        Assert.All(progress.Advances.Where(a => a.Item != "Sfx/beep.wav"), a => Assert.Null(a.Container));
+        Assert.Equal("Sounds.zip", progress.Items.Single(a => a.Item == "Sfx/beep.wav").Container);
+        Assert.All(progress.Items.Where(a => a.Item is not null && a.Item != "Sfx/beep.wav"), a => Assert.Null(a.Container));
+        // Opening an archive clears the last file, which is not inside it.
+        Assert.Contains((null, "Sounds.zip", 5L), progress.Items);
         Assert.Contains("broken.zip", progress.Containers); // named while it was being opened
         Assert.Null(progress.Container);                   // cleared once the scan ended
 
@@ -126,6 +158,88 @@ public class ImportStagingTests
         await kit.Stager.ScanAndGroupAsync(session.Id, resumed, 6, ct);
         Assert.Equal(3L, resumed.Counts["assets"]);
         Assert.False(resumed.Counts.ContainsKey("files found"));
+    }
+
+    /// <summary>Runs the scan and grouping of a new session and returns what it reported.</summary>
+    private static async Task<RecordingProgress> ScanAsync(ImportKit kit, ImportRequest request)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var session = await kit.Stager.CreateSessionAsync(request, ct);
+        var progress = new RecordingProgress();
+        await kit.Stager.ScanAndGroupAsync(session.Id, progress, 6, ct);
+        return progress;
+    }
+
+    /// <summary>Spec "Import scan counts files processed out of total": the total is set before the scan advances.</summary>
+    private static void AssertTotalFirst(RecordingProgress progress, long total)
+    {
+        var firstAdvance = progress.ScanEvents.FindIndex(e => e.Kind == "advance");
+        Assert.True(firstAdvance > 0, string.Join(" ", progress.ScanEvents));
+        Assert.Equal(("total", total), progress.ScanEvents[firstAdvance - 1]);
+        Assert.DoesNotContain(progress.ScanEvents.Skip(firstAdvance), e => e.Kind == "total");
+        Assert.All(progress.ScanEvents.Where(e => e.Kind == "advance"), e => Assert.True(e.Value > 0));
+        Assert.Equal(total, progress.Done);
+    }
+
+    [Fact]
+    public async Task Scan_counts_top_level_files_out_of_the_total()
+    {
+        await using var kit = await ImportKit.CreateAsync();
+        var folder = await PackFolderAsync(kit.Catalog.Dir);
+        kit.Catalog.Dir.Write("Forest Pack/Old/stone.png", Png(MagickColors.Gray));
+
+        var progress = await ScanAsync(kit, new ImportRequest([folder], Depth: AiDepth.None, IgnoredFolders: ["Old"]));
+
+        // 8 top-level items: 6 plain files and 2 zips (the unreadable one too); the ignored folder is left out.
+        AssertTotalFirst(progress, 8);
+        Assert.Equal("Listing files...", progress.Items[0].Item);
+        // Sorted, Sounds.zip is the 6th item: 5 done while its file is scanned, and the zip counts only once the walk
+        // has moved on to the next file.
+        Assert.Equal(5, progress.Items.Single(i => i.Item == "Sfx/beep.wav").Done);
+        // The file before an archive is done as soon as the archive starts to open, not after its extraction.
+        Assert.Equal([("broken.zip", 0L), ("Sounds.zip", 5L)], progress.Opened.Distinct());
+        Assert.Equal(6, progress.Items.Single(i => i.Item == @"Sprites\Coin.png").Done);
+        Assert.Equal(7L, progress.Counts[ImportStager.FilesFoundCount]); // the zip's file is still found
+    }
+
+    [Fact]
+    public async Task Rescan_total_covers_only_the_added_files()
+    {
+        await using var kit = await ImportKit.CreateAsync();
+        var folder = await PackFolderAsync(kit.Catalog.Dir);
+
+        var progress = await ScanAsync(kit, new ImportRequest([folder], Depth: AiDepth.None, OnlyPaths: ["Sounds.zip", "Sprites/Coin.png"]));
+
+        AssertTotalFirst(progress, 2); // the added archive is one file
+        Assert.Equal(2L, progress.Counts[ImportStager.ImportableCount]);
+    }
+
+    [Fact]
+    public async Task Several_inputs_share_one_total_from_the_start()
+    {
+        await using var kit = await ImportKit.CreateAsync();
+        var dir = kit.Catalog.Dir;
+        dir.Write("A/one.png", Png(MagickColors.Red));
+        dir.Write("A/two.png", Png(MagickColors.Blue));
+        dir.Write("B/three.png", Png(MagickColors.Green));
+        dir.Write("B/sub/four.png", Png(MagickColors.Yellow));
+        dir.Write("B/five.txt", "notes");
+
+        var progress = await ScanAsync(kit, new ImportRequest([Path.Combine(dir.Path, "A"), Path.Combine(dir.Path, "B")], Depth: AiDepth.None));
+
+        AssertTotalFirst(progress, 5);
+    }
+
+    [Fact]
+    public async Task Single_archive_input_is_one_file()
+    {
+        await using var kit = await ImportKit.CreateAsync();
+        var folder = await PackFolderAsync(kit.Catalog.Dir);
+
+        var progress = await ScanAsync(kit, new ImportRequest([Path.Combine(folder, "Sounds.zip")], Depth: AiDepth.None));
+
+        AssertTotalFirst(progress, 1);
+        Assert.Equal(0, progress.Items.Single(i => i.Item == "Sfx/beep.wav").Done);
     }
 
     [Fact]
