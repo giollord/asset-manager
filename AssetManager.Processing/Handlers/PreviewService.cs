@@ -140,8 +140,7 @@ public sealed class PreviewService(
             }
 
             asset.UpdatedAt = DateTime.UtcNow;
-            // Import runs this on every core at once: the save takes its turn (see CatalogStore.AcquireWriteAsync).
-            using var turn = await catalog.AcquireWriteAsync(ct);
+            // Import runs this on every core at once: the transaction waits for its write turn (see CatalogWriteGate).
             await using var tx = await db.Database.BeginTransactionAsync(ct);
             await db.SaveChangesAsync(ct);
             await AssetProcessor.SavePreviewsAsync(db, id, previews, options.Version(), ct);

@@ -25,7 +25,8 @@ public sealed class CatalogStore : IDbContextFactory<CatalogDbContext>
     public CatalogStore(ILogger<CatalogStore>? logger = null, IEnumerable<IInterceptor>? interceptors = null)
     {
         _logger = (ILogger?)logger ?? NullLogger.Instance;
-        _interceptors = [new SqlitePragmaInterceptor(), new Search.SearchIndexInterceptor(), new Search.EmbeddingDirtyInterceptor(), .. interceptors ?? []];
+        WriteGate = new CatalogWriteGate(_logger);
+        _interceptors = [new SqlitePragmaInterceptor(), WriteGate, new Search.SearchIndexInterceptor(), new Search.EmbeddingDirtyInterceptor(), .. interceptors ?? []];
     }
 
     /// <summary>Path of the opened catalog, or null before <see cref="OpenAsync"/>.</summary>
@@ -39,27 +40,14 @@ public sealed class CatalogStore : IDbContextFactory<CatalogDbContext>
 
     public void NotifyContentChanged() => ContentChanged?.Invoke();
 
-    private readonly SemaphoreSlim _writeGate = new(1, 1);
+    /// <summary>Serializes the catalog's in-process writers (see <see cref="CatalogWriteGate"/>).</summary>
+    public CatalogWriteGate WriteGate { get; }
 
     /// <summary>
-    /// Takes the in-process write turn; dispose the result to release it. Parallel workers that each save in their own
-    /// transaction take it around the save: SQLite's busy handler is not fair, so with many writers one can keep losing
-    /// the lock past the busy timeout ("database is locked"), worst on a slow (USB) drive. The gate queues them instead.
+    /// Takes an in-process write turn that is not tied to a connection; dispose the result to release it. Writes made
+    /// through a catalog DbContext take their turn by themselves, so do not hold this around one.
     /// </summary>
-    public async Task<IDisposable> AcquireWriteAsync(CancellationToken ct = default)
-    {
-        await _writeGate.WaitAsync(ct);
-        return new WriteTurn(_writeGate);
-    }
-
-    private sealed class WriteTurn(SemaphoreSlim gate) : IDisposable
-    {
-        private int _released;
-        public void Dispose()
-        {
-            if (Interlocked.Exchange(ref _released, 1) == 0) gate.Release();
-        }
-    }
+    public Task<IDisposable> AcquireWriteAsync(CancellationToken ct = default) => WriteGate.AcquireAsync(ct);
 
     public CatalogDbContext CreateDbContext() =>
         new(_options ?? throw new InvalidOperationException("No catalog is open."));

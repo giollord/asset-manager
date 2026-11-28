@@ -37,6 +37,8 @@ public static partial class SearchIndexer
             try
             {
                 var outer = db.Database.CurrentTransaction?.GetDbTransaction();
+                // The raw transaction is invisible to EF's interceptors: take the write turn for it (see CatalogWriteGate).
+                using var turn = outer is null ? await CatalogWriteGate.EnterAsync(db, ct) : null;
                 var tx = outer ?? await conn.BeginTransactionAsync(ct);
                 await using (var del = conn.CreateCommand())
                 {
