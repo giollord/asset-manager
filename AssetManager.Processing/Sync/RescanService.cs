@@ -13,7 +13,8 @@ namespace AssetManager.Processing.Sync;
 public enum RescanStatus { Unchanged, Changed, Skipped }
 
 /// <summary>A file of a rescanned folder source; <see cref="AssetId"/> is set for changed and removed files.</summary>
-public sealed record RescanFile(string RelativePath, long? AssetId = null);
+/// <param name="SourceId">For a changed nested archive or package: its own source, which "Update" replaces.</param>
+public sealed record RescanFile(string RelativePath, long? AssetId = null, long? SourceId = null);
 
 /// <summary>
 /// What changed in one source since its import (spec "Rescan imported sources"). Transient: it lives in the rescan job's
@@ -96,7 +97,7 @@ public sealed class RescanService(CatalogStore catalog, ILocationResolver resolv
                 seen.Add(key);
                 if (childPaths.TryGetValue(key, out var child))
                 {
-                    if (ContainerChanged(child, file)) changed.Add(new RescanFile(rel));
+                    if (ContainerChanged(child, file)) changed.Add(new RescanFile(rel, SourceId: child.Id));
                     continue;
                 }
                 if (known.TryGetValue(key, out var k))

@@ -52,10 +52,10 @@ public class ImportStagingTests
         Assert.NotNull(skips.Single(s => s.Path.EndsWith("Player.cs")).Location);
 
         var session = await db.ImportSessions.SingleAsync(s => s.Id == sessionId, TestContext.Current.CancellationToken);
-        Assert.Equal((ImportSessionState.Ready, 5), (session.State, session.StagedThrough));
+        Assert.Equal((ImportSessionState.Committed, 5), (session.State, session.StagedThrough));
 
         var staged = await db.AllAssets.Include(a => a.Source).Include(a => a.Tags).ThenInclude(t => t.Tag).Include(a => a.Files)
-            .Where(a => a.ImportSessionId == sessionId).ToListAsync(TestContext.Current.CancellationToken);
+            .Where(a => a.Source.CommittedFromSessionId == sessionId).ToListAsync(TestContext.Current.CancellationToken);
         staged = staged.OrderBy(a => a.Name, StringComparer.OrdinalIgnoreCase).ToList();
         Assert.Equal(["beep", "Coin", "Grass_Albedo"], staged.Select(a => a.Name));
         Assert.Equal([AssetType.Audio, AssetType.Image, AssetType.Texture], staged.Select(a => a.Type));
@@ -251,30 +251,32 @@ public class ImportStagingTests
     }
 
     [Fact]
-    public async Task Nothing_committed_before_confirm()
+    public async Task Nothing_in_the_catalog_before_the_commit()
     {
+        var ct = TestContext.Current.CancellationToken;
         await using var kit = await ImportKit.CreateAsync();
         var folder = await PackFolderAsync(kit.Catalog.Dir);
-
-        var (sessionId, _) = await kit.ImportAsync(new ImportRequest([folder], ["humble-lowpoly"], Depth: AiDepth.None));
+        var session = await kit.Stager.CreateSessionAsync(new ImportRequest([folder], ["humble-lowpoly"], Depth: AiDepth.None), ct);
+        await kit.Stager.ScanAndGroupAsync(session.Id, new NullProgress(), 6, ct);
+        await kit.Stager.ProcessAsync(session.Id, new NullProgress(), 6, ct); // previews done, the commit not yet
 
         await using (var db = kit.Catalog.Db())
         {
-            Assert.Equal(0, await db.Assets.CountAsync(TestContext.Current.CancellationToken));   // the catalog view
-            Assert.Equal(0, await db.Sources.CountAsync(TestContext.Current.CancellationToken));
-            Assert.Equal(3, await db.AllAssets.CountAsync(a => a.ImportSessionId == sessionId, TestContext.Current.CancellationToken));
+            Assert.Equal(0, await db.Assets.CountAsync(ct));   // the catalog view
+            Assert.Equal(0, await db.Sources.CountAsync(ct));
+            Assert.Equal(3, await db.AllAssets.CountAsync(a => a.ImportSessionId == session.Id, ct));
         }
 
-        await kit.Imports.CancelAsync(sessionId, TestContext.Current.CancellationToken);
+        await kit.Imports.CancelAsync(session.Id, ct);
 
         await using (var db = kit.Catalog.Db())
         {
-            Assert.Equal(0, await db.AllAssets.CountAsync(TestContext.Current.CancellationToken));
-            Assert.Equal(0, await db.AllSources.CountAsync(TestContext.Current.CancellationToken));
-            Assert.Equal(0, await db.Tags.CountAsync(TestContext.Current.CancellationToken));
-            Assert.Equal(0, await db.Previews.CountAsync(TestContext.Current.CancellationToken));
-            Assert.Equal(0, await db.StagedSkips.CountAsync(TestContext.Current.CancellationToken));
-            Assert.Equal(ImportSessionState.Cancelled, (await db.ImportSessions.SingleAsync(TestContext.Current.CancellationToken)).State);
+            Assert.Equal(0, await db.AllAssets.CountAsync(ct));
+            Assert.Equal(0, await db.AllSources.CountAsync(ct));
+            Assert.Equal(0, await db.Tags.CountAsync(ct));
+            Assert.Equal(0, await db.Previews.CountAsync(ct));
+            Assert.Equal(0, await db.StagedSkips.CountAsync(ct));
+            Assert.Equal(ImportSessionState.Cancelled, (await db.ImportSessions.SingleAsync(ct)).State);
         }
     }
 
@@ -289,10 +291,10 @@ public class ImportStagingTests
 
         Assert.True(job.State == JobState.Completed, job.Error);
         await using var db = kit.Catalog.Db();
-        var sources = await db.AllSources.Where(s => s.ImportSessionId == sessionId).OrderBy(s => s.DisplayName).ToListAsync(TestContext.Current.CancellationToken);
+        var sources = await db.AllSources.Where(s => s.CommittedFromSessionId == sessionId).OrderBy(s => s.DisplayName).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Equal([(SourceKind.Archive, "Icons"), (SourceKind.File, "Rock.png")], sources.Select(s => (s.Kind, s.DisplayName)));
         Assert.All(sources, s => Assert.Null(s.ParentSourceId));
-        Assert.Equal(2, await db.AllAssets.CountAsync(a => a.ImportSessionId == sessionId, TestContext.Current.CancellationToken));
+        Assert.Equal(2, await db.AllAssets.CountAsync(a => a.Source.CommittedFromSessionId == sessionId, TestContext.Current.CancellationToken));
     }
     [Fact]
     public async Task Re_adding_same_folder_marks_duplicates_excluded()
@@ -300,20 +302,14 @@ public class ImportStagingTests
         await using var kit = await ImportKit.CreateAsync();
         var folder = await PackFolderAsync(kit.Catalog.Dir);
         var ct = TestContext.Current.CancellationToken;
+        await kit.CatalogAsync(new ImportRequest([folder], Depth: AiDepth.None));
+        var second = await kit.Stager.CreateSessionAsync(new ImportRequest([folder], Depth: AiDepth.None), ct);
 
-        var (first, _) = await kit.ImportAsync(new ImportRequest([folder], Depth: AiDepth.None));
-        await using (var db = kit.Catalog.Db())
-        {
-            // Simulate the commit of the first session.
-            await db.AllAssets.Where(a => a.ImportSessionId == first).ExecuteUpdateAsync(u => u.SetProperty(a => a.ImportSessionId, (long?)null), ct);
-            await db.AllSources.Where(s => s.ImportSessionId == first).ExecuteUpdateAsync(u => u.SetProperty(s => s.ImportSessionId, (long?)null), ct);
-        }
+        await kit.Stager.ScanAndGroupAsync(second.Id, new NullProgress(), 6, ct);
+        await kit.Stager.ProcessAsync(second.Id, new NullProgress(), 6, ct);
 
-        var (second, job) = await kit.ImportAsync(new ImportRequest([folder], Depth: AiDepth.None));
-
-        Assert.True(job.State == JobState.Completed, job.Error);
         await using var check = kit.Catalog.Db();
-        var staged = await check.AllAssets.Where(a => a.ImportSessionId == second).ToListAsync(ct);
+        var staged = await check.AllAssets.Where(a => a.ImportSessionId == second.Id).ToListAsync(ct);
         Assert.Equal(3, staged.Count);
         Assert.All(staged, a => Assert.NotNull(a.DuplicateOfAssetId));
         Assert.All(staged, a => Assert.False(a.Included));
@@ -324,7 +320,25 @@ public class ImportStagingTests
             Assert.Equal((original.Type, original.PreviewOptionsVersion), (dup.Type, dup.PreviewOptionsVersion));
             Assert.Equal(await check.Previews.CountAsync(p => p.AssetId == original.Id, ct), await check.Previews.CountAsync(p => p.AssetId == dup.Id, ct));
         }
-        Assert.Contains("\"assets\":3", job.SummaryJson);
+    }
+
+    /// <summary>Spec scenario "Re-adding same folder": nothing is added, and the results list every item as cataloged.</summary>
+    [Fact]
+    public async Task Re_adding_same_folder_adds_nothing()
+    {
+        await using var kit = await ImportKit.CreateAsync();
+        var folder = await PackFolderAsync(kit.Catalog.Dir);
+        var ct = TestContext.Current.CancellationToken;
+        await kit.CatalogAsync(new ImportRequest([folder], Depth: AiDepth.None));
+
+        var second = await kit.CatalogAsync(new ImportRequest([folder], Depth: AiDepth.None));
+
+        await using var db = kit.Catalog.Db();
+        Assert.Equal(3, await db.Assets.CountAsync(ct));
+        Assert.Equal(["Forest Pack"], await db.Sources.Where(s => s.ParentSourceId == null).Select(s => s.DisplayName).ToListAsync(ct));
+        var duplicates = (await kit.Results.LoadAsync(second, ct))!.Sources.SelectMany(s => s.Skips).Where(s => s.Kind == SkipKind.Duplicate).ToList();
+        Assert.Equal(3, duplicates.Count);
+        Assert.Equal(0, (await kit.Results.LoadAsync(second, ct))!.Assets);
     }
 }
 
@@ -342,12 +356,12 @@ public class ImportEnrichmentTests
         Assert.True(job.State == JobState.Completed, job.Error);
         Assert.True(job.Errors == 0, string.Join("; ", (await kit.Jobs.ItemErrorsAsync(job.Id, TestContext.Current.CancellationToken)).Select(e => $"{e.ItemName}: {e.Reason}")));
         await using var db = kit.Catalog.Db();
-        var forest = await db.AllSources.SingleAsync(s => s.ImportSessionId == sessionId && s.DisplayName == "Forest Pack", TestContext.Current.CancellationToken);
+        var forest = await db.AllSources.SingleAsync(s => s.CommittedFromSessionId == sessionId && s.DisplayName == "Forest Pack", TestContext.Current.CancellationToken);
         Assert.Equal("A pack of test assets.", forest.Description);
         Assert.Equal(("CC0", "LICENSE.txt"), (forest.License.Kind, forest.License.Evidence));
         Assert.StartsWith("Includes 2 code/project files", forest.Notes);
 
-        var assets = await db.AllAssets.Include(a => a.Tags).ThenInclude(t => t.Tag).Where(a => a.ImportSessionId == sessionId)
+        var assets = await db.AllAssets.Include(a => a.Tags).ThenInclude(t => t.Tag).Where(a => a.Source.CommittedFromSessionId == sessionId)
             .ToListAsync(TestContext.Current.CancellationToken);
         Assert.All(assets, a => Assert.Equal(AiStatus.Enriched, a.AiStatus));
         var coin = assets.Single(a => a.Name == "Coin");
@@ -358,6 +372,27 @@ public class ImportEnrichmentTests
         Assert.Contains(chat.Prompts, p => p.Contains("Instruction from the user (follow it): These are forest props."));
         Assert.Contains(chat.Prompts, p => p.Contains("=== LICENSE.txt ==="));
         Assert.Equal(5, (await db.ImportSessions.SingleAsync(TestContext.Current.CancellationToken)).StagedThrough);
+    }
+
+    /// <summary>
+    /// Regression: the pack pass loaded assets without their tags, so a pack tag the asset already had (a shared tag
+    /// of the import, or an AI tag copied from an identical cataloged asset) was added again and the save failed
+    /// with "UNIQUE constraint failed: AssetTags.AssetId, AssetTags.TagId".
+    /// </summary>
+    [Fact]
+    public async Task Pack_tag_the_assets_already_have_is_not_added_twice()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var kit = await ImportKit.CreateAsync(new SchemaAwareChatClient());
+        var folder = await ImportStagingTests.PackFolderAsync(kit.Catalog.Dir);
+
+        var (sessionId, job) = await kit.ImportAsync(new ImportRequest([folder], SharedTags: ["pack-tag"], Depth: AiDepth.PackOnly));
+
+        Assert.True(job.State == JobState.Completed, job.Error);
+        await using var db = kit.Catalog.Db();
+        var assets = await db.AllAssets.Include(a => a.Tags).ThenInclude(t => t.Tag).Where(a => a.Source.CommittedFromSessionId == sessionId).ToListAsync(ct);
+        Assert.NotEmpty(assets);
+        Assert.All(assets, a => Assert.Single(a.Tags, t => t.Tag.Name == "pack-tag"));
     }
 
     [Fact]
@@ -373,7 +408,7 @@ public class ImportEnrichmentTests
         Assert.True(job.State == JobState.Completed && job.Warnings == 0, job.Error);
         Assert.Equal(2, chat.MaxConcurrent); // 3 sheets of up to 8 items, two at a time
         await using var db = kit.Catalog.Db();
-        var assets = await db.AllAssets.Include(a => a.Tags).ThenInclude(t => t.Tag).Where(a => a.ImportSessionId == sessionId).ToListAsync(ct);
+        var assets = await db.AllAssets.Include(a => a.Tags).ThenInclude(t => t.Tag).Where(a => a.Source.CommittedFromSessionId == sessionId).ToListAsync(ct);
         Assert.Equal(20, assets.Count);
         Assert.All(assets, a => Assert.Equal((AiStatus.Enriched, $"Described {a.Name}."), (a.AiStatus, a.Description)));
         Assert.All(assets, a => Assert.Contains(a.Tags, t => t.Tag.Name == "ai-tag" && t.Origin == TagOrigin.AI));
@@ -394,7 +429,7 @@ public class ImportEnrichmentTests
         {
             // As after a failure in the item pass: the pack pass is done, items are pending or failed.
             await db.ImportSessions.ExecuteUpdateAsync(u => u.SetProperty(s => s.StagedThrough, 4), ct);
-            var ids = await db.AllAssets.Where(a => a.ImportSessionId == sessionId).OrderBy(a => a.Id).Select(a => a.Id).ToListAsync(ct);
+            var ids = await db.AllAssets.Where(a => a.Source.CommittedFromSessionId == sessionId).OrderBy(a => a.Id).Select(a => a.Id).ToListAsync(ct);
             await db.AllAssets.Where(a => a.Id == ids[0]).ExecuteUpdateAsync(u => u.SetProperty(a => a.AiStatus, AiStatus.Failed), ct);
             await db.AllAssets.Where(a => ids.Skip(1).Contains(a.Id)).ExecuteUpdateAsync(u => u.SetProperty(a => a.AiStatus, AiStatus.Pending), ct);
         }
@@ -405,7 +440,7 @@ public class ImportEnrichmentTests
 
         Assert.True(resumed.State == JobState.Completed && resumed.Warnings == 0, resumed.Error);
         await using var check = kit.Catalog.Db();
-        Assert.All(await check.AllAssets.Where(a => a.ImportSessionId == sessionId).ToListAsync(ct), a => Assert.Equal(AiStatus.Enriched, a.AiStatus));
+        Assert.All(await check.AllAssets.Where(a => a.Source.CommittedFromSessionId == sessionId).ToListAsync(ct), a => Assert.Equal(AiStatus.Enriched, a.AiStatus));
     }
 
     [Fact]
@@ -420,7 +455,7 @@ public class ImportEnrichmentTests
 
         Assert.True(job.State == JobState.Completed && job.Warnings == 0, job.Error);
         await using var db = kit.Catalog.Db();
-        Assert.All(await db.AllAssets.Where(a => a.ImportSessionId == sessionId).ToListAsync(TestContext.Current.CancellationToken),
+        Assert.All(await db.AllAssets.Where(a => a.Source.CommittedFromSessionId == sessionId).ToListAsync(TestContext.Current.CancellationToken),
             a => Assert.Equal(AiStatus.Enriched, a.AiStatus));
     }
 
@@ -435,7 +470,7 @@ public class ImportEnrichmentTests
         Assert.Equal(JobState.Completed, job.State);
         Assert.Equal(1, job.Warnings);
         await using var db = kit.Catalog.Db();
-        Assert.All(await db.AllAssets.Where(a => a.ImportSessionId == sessionId).ToListAsync(TestContext.Current.CancellationToken),
+        Assert.All(await db.AllAssets.Where(a => a.Source.CommittedFromSessionId == sessionId).ToListAsync(TestContext.Current.CancellationToken),
             a => Assert.Equal(AiStatus.NotEnriched, a.AiStatus));
         Assert.Contains("not enriched", (await kit.Jobs.ItemErrorsAsync(job.Id, TestContext.Current.CancellationToken)).Single().Reason);
     }

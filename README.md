@@ -12,10 +12,10 @@ The specification lives in [`openspec/specs`](openspec/specs), one folder per ca
 
 ![Browse: a search by meaning for "colorful game props" limited to 3D models, showing a grid of blasters, barrels and banners, with type, tag, license and availability filters on the left](docs/screenshots/browse.png)
 
-| | | |
-|---|---|---|
-| ![Asset details of a blaster model: a turntable of its stored renders, orientation controls, the AI description, tags and the CC0 license](docs/screenshots/details-model.png) | ![Dashboard: catalog totals, assets by type, AI enrichment, availability, licenses, the license audit and model issues](docs/screenshots/dashboard.png) | ![Import review: a staged pirate pack with its detected CC0 license, an AI description and previews of the models to include](docs/screenshots/import-review.png) |
-| Asset details | Dashboard | Import review |
+| | |
+|---|---|
+| ![Asset details of a blaster model: a turntable of its stored renders, orientation controls, the AI description, tags and the CC0 license](docs/screenshots/details-model.png) | ![Dashboard: catalog totals, assets by type, AI enrichment, availability, licenses, the license audit and model issues](docs/screenshots/dashboard.png) |
+| Asset details | Dashboard |
 
 The screenshots show free CC0 packs by [Kenney](https://kenney.nl).
 
@@ -83,7 +83,7 @@ Test classes that start a real model server belong to the non-parallel `AiModelC
 Everything the app keeps lives in one data folder: the default catalog (`catalog.amdb`), `settings.json`, catalog backups (`backups`), downloaded AI models (`models`), temporary files (`temp`), logs (`logs`) and the embedded browser profile (`webview`). The extraction cache (files unpacked from archives and packages while importing) is disposable and lives on the system drive, in `%LOCALAPPDATA%\AssetManager\cache`, even for a portable copy: unpacking writes thousands of small files, which an internal SSD handles instantly and a USB hard drive at about 10 per second. It is limited to 4 GB by default (Settings → Import): after each extraction, the least recently used entries above the limit are removed. Settings → Import can also move it. Settings → About shows the folder in use, the mode and an "Open folder" button.
 
 | Mode | When | Data folder |
-|---|---|---|
+|---|---|
 | Portable | The app folder contains a file named `portable` (the portable package ships it) | `data` next to `AssetManager.exe` |
 | Standard | No `portable` file, e.g. a build run from the repository | `%LOCALAPPDATA%\AssetManager` |
 | Fallback | A portable copy whose folder cannot be written (e.g. under `Program Files`) | `%LOCALAPPDATA%\AssetManager`; Settings → About says why |
@@ -128,7 +128,7 @@ The AI is optional. Without a model, imports still produce metadata and previews
 Settings → AI model offers a one-click download of the recommended models from Hugging Face into the `models` folder of the [data folder](#data-folder). Downloads resume after interruption and are verified against pinned SHA-256 hashes:
 
 | Package | Files | Used for |
-|---|---|---|
+|---|---|
 | Gemma 4 E4B (Q4_K_M) | [`gemma-4-E4B-it-Q4_K_M.gguf`](https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF) (5.0 GB) and the vision projector `mmproj-F16.gguf` (1.0 GB) | descriptions, tags, licenses, links, orientation checks, collection descriptions |
 | EmbeddingGemma 300M (Q8_0) | [`embeddinggemma-300M-Q8_0.gguf`](https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF) (330 MB) | semantic search and "find similar" |
 
@@ -146,11 +146,11 @@ To use files you already have, pick them in Settings → AI model with "Pick fil
 
 The catalog does not watch your drives. Instead, **Sources → Check for changes** (or **Rescan** on one source) compares imported sources with their files and lists what changed. Nothing in the catalog changes until you act on a result:
 
-- **Folder sources** report added, changed (size or content) and removed files. Rescans follow the same ignored-folder and file-type rules as imports, so files an import skipped are not reported. "Import added files" opens the import review with the new files assigned to the existing source; they get its source tags. "Re-import changed assets" refreshes their metadata and previews. "Remove missing assets" deletes the assets whose files are gone, after a confirmation.
-- **Archive and package sources** report whether the file changed. "Update source" imports it again, and the import review offers it as a new version of the source (the same flow as importing a new version by hand).
+- **Folder sources** report added, changed (size or content) and removed files. Rescans follow the same ignored-folder and file-type rules as imports, so files an import skipped are not reported. "Import added files" imports the new files into the existing source; they get its source tags. "Re-import changed assets" refreshes their metadata and previews. "Remove missing assets" deletes the assets whose files are gone, after a confirmation.
+- **Archive and package sources** report whether the file changed. "Update source" imports it again as the new version of that source and replaces it: assets that match keep their edits and tags, new ones are added and missing ones removed. A nested archive or package has its own "Update" button.
 - **Sources on a detached drive** are listed as skipped, never as removed.
 
-**Library folders** (Settings → Library) are the folders where new packs appear, such as a downloads folder or a folder of purchased packs on an external drive. They are stored per drive, like sources, so they still work when the drive gets another letter. Checking for changes also lists every folder, archive and `.unitypackage` directly inside them that is not imported yet, and marks the ones that look like a new version of an imported pack (same name apart from version numbers, or mostly the same files). Pick the ones you want and import them in one go.
+**Library folders** (Settings → Library) are the folders where new packs appear, such as a downloads folder or a folder of purchased packs on an external drive. They are stored per drive, like sources, so they still work when the drive gets another letter. Checking for changes also lists every folder, archive and `.unitypackage` directly inside them that is not imported yet, and marks the ones that look like a new version of an imported pack (same name apart from version numbers, or mostly the same files). Pick the ones you want and import them in one go. A pack with the same Unity Asset Store id as an imported one replaces it; a pack that only looks similar is imported as a new source, and you can delete the old one or use "Update source" on it instead.
 
 **Check for changes at startup** (Settings → Library, off by default) runs both checks in the background about 30 seconds after the app starts. When it finds something, a notification opens the results; it never imports anything by itself.
 
@@ -194,7 +194,7 @@ Main ideas (details in `design.md`):
 
 - **One catalog file.** Metadata, previews, settings, jobs and optional stored copies of originals live in one SQLite file. Originals stay where they are and are found by volume serial and relative path, so a drive that gets a new letter is still found.
 - **Nested containers are virtual.** A zip inside a folder inside a Unity package is walked without unpacking it on disk. Single entries are extracted on demand into a size- and age-limited cache.
-- **Staged imports.** An import scans, groups files into assets (a model with its textures, a sprite sheet), renders previews and runs the AI into staging rows. The user reviews and edits, then confirms; nothing enters the catalog before that. A new version of a cataloged package is detected and replaces the old one in place, keeping user edits.
+- **Imports commit on their own.** An import scans, groups files into assets (a model with its textures, a sprite sheet) and renders previews into staging rows that the catalog does not show yet. Once the previews are done, each source is committed in one transaction, without asking; the AI then enriches the committed assets in the background. Cancelling before the commit leaves no trace; afterwards it only stops the AI, and unwanted assets are deleted from the catalog. The import page then lists what was added per source and every skipped file with its reason. A package with the same Unity Asset Store id as a cataloged one replaces it in place, keeping user edits.
 - **Previews.** Images become WebP thumbnails. Models are rendered offscreen by three.js in the WebView from a GLB written by our own `GlbWriter` (Assimp loads the files): 24 views around the model. Animations become a looping animated WebP. Audio gets a short Opus clip and a waveform. Every size and threshold is a setting stored in the catalog.
 - **Jobs.** Every long operation (import, re-import, previews, AI, store/unstore, export, compaction) is a persistent job with stages, progress, ETA, per-item errors, "Retry failed", and resume after a restart.
 
@@ -213,7 +213,7 @@ It serves the same UI at `http://localhost:5022` and uses the same catalog and s
 ## Bundled native binaries
 
 | Component | Version | License | How it is included |
-|---|---|---|---|
+|---|---|
 | [FFmpeg](https://ffmpeg.org) (LGPL shared build from [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds)) | 8.1 | LGPL 2.1+ | Downloaded at build time, SHA-256 pinned in `AssetManager.Processing.csproj`, copied to `ffmpeg/` beside the app with its `FFMPEG.LICENSE.txt`. The DLLs are loaded dynamically, unmodified, by the separate `ffmpeg.exe`/`ffprobe.exe` processes. |
 | [llama.cpp](https://github.com/ggml-org/llama.cpp) `llama-server` (Vulkan build, which also carries the CPU backends) | b12141 | MIT | Downloaded at build time, SHA-256 pinned in `AssetManager.AI.csproj`, copied to `llama/`. CPU mode runs the same server without the GPU. Its MIT license (from the same tag; the release zips do not include it) is checked in under `AssetManager.AI/licenses` and copied to `llama/LICENSE.txt`. |
 | [Assimp](https://github.com/assimp/assimp) through the AssimpNetter NuGet package | 6.x | BSD 3-Clause | NuGet package with the native library. |

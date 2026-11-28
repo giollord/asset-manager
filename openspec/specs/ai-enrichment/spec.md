@@ -57,7 +57,7 @@ Each extracted value SHALL reference the document it came from.
 - **THEN** its URL is stored as a related link of the source
 
 ### Requirement: Scripts and non-asset content noted
-Code and project files SHALL be summarized in the source notes and SHALL NOT be imported as assets. This covers C#, shaders as code, JS, assembly definitions, editor scripts and similar files. The AI SHALL decide whether borderline items are assets, and the user SHALL be able to override that decision in the import preview.
+Code and project files SHALL be summarized in the source notes and SHALL NOT be imported as assets. This covers C#, shaders as code, JS, assembly definitions, editor scripts and similar files. The AI SHALL decide whether borderline items are assets. The user SHALL be able to override that decision after the import by deleting an unwanted asset from the catalog.
 
 #### Scenario: Package with scripts
 - **WHEN** a Unity package contains a `Scripts/` folder with 40 `.cs` files

@@ -124,10 +124,26 @@ public class RescanTests
         Assert.True(kitResult.ContainerChanged);
         var folder = Assert.Single(results, r => r.Kind == SourceKind.Folder);
         Assert.Empty(folder.Added); // the nested package is a source of its own, not a new file
-        Assert.Equal("inner.unitypackage", Assert.Single(folder.Changed).RelativePath);
+        var nested = Assert.Single(folder.Changed);
+        Assert.Equal("inner.unitypackage", nested.RelativePath);
+        long innerId;
+        await using (var db = kit.Catalog.Db())
+            innerId = await db.Sources.Where(s => s.ParentSourceId == folder.SourceId).Select(s => s.Id).SingleAsync(Ct);
+        Assert.Equal(innerId, nested.SourceId);
+
+        // "Update inner.unitypackage" replaces the nested source in place (spec "Explicit update").
+        await kit.CatalogAsync(new ImportRequest([Path.Combine(kit.Catalog.Dir.Path, "Folder", "inner.unitypackage")], Depth: AiDepth.None,
+            ReplaceSourceId: nested.SourceId));
+        await using (var db = kit.Catalog.Db())
+        {
+            Assert.Equal(3, await db.Sources.CountAsync(Ct));
+            var inner = await db.Sources.SingleAsync(s => s.Id == innerId, Ct);
+            Assert.Equal(folder.SourceId, inner.ParentSourceId);
+            Assert.Equal(1, await db.Assets.CountAsync(a => a.SourceId == innerId, Ct));
+        }
     }
 
-    /// <summary>Spec "Import added files": staged into the existing source, carrying its source tags after confirm.</summary>
+    /// <summary>Spec "Import added files": committed into the existing source, carrying its source tags.</summary>
     [Fact]
     public async Task Import_added_files_into_the_source()
     {
@@ -142,15 +158,9 @@ public class RescanTests
 
         var added = Assert.Single((await RescanAsync(kit)).Results).Added.Select(a => a.RelativePath).ToList();
         var (session, job) = await kit.ImportAsync(new ImportRequest([root], Depth: AiDepth.None, IntoSourceId: sourceId, OnlyPaths: added));
-        Assert.True(job.State == JobState.Completed, job.Error);
-        await using (var db = kit.Catalog.Db())
-        {
-            var staged = await db.AllAssets.Where(a => a.ImportSessionId == session).Include(a => a.Source).ToListAsync(Ct);
-            Assert.Equal(6, staged.Count);
-            Assert.All(staged, a => Assert.Equal("Pack", a.Source.DisplayName));
-        }
-        var commit = await kit.Jobs.WaitAsync(await kit.Imports.ConfirmAsync(session, Ct), Ct);
-        Assert.True(commit.State == JobState.Completed, commit.Error);
+        Assert.True(job.State == JobState.Completed, job.Error); // committed without confirmation
+        var result = Assert.Single((await kit.Results.LoadAsync(session, Ct))!.Sources);
+        Assert.Equal((sourceId, "Pack", 6), (result.SourceId, result.Name, result.Assets));
 
         await using (var db = kit.Catalog.Db())
         {

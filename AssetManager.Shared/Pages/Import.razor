@@ -97,49 +97,46 @@
             </MudStack>
         </MudStep>
 
-        <MudStep Title="Preview / Review" Completed="_state is ImportSessionState.Committing or ImportSessionState.Committed" Disabled="_session is null">
+        <MudStep Title="Importing" Completed="_state == ImportSessionState.Committed" Disabled="_session is null">
             @if (_session is not null)
             {
                 @if (_importJob is not null)
                 {
                     <MudPaper Outlined="true" Class="pa-3 mb-3" id="import-progress"><JobProgressView Job="_importJob" /></MudPaper>
-                    @if (!_importJob.IsActive && _state is not ImportSessionState.Cancelled
-                         && (_importJob.State is JobState.Failed or JobState.Cancelled || _unenriched > 0))
-                    {
-                        <MudAlert Severity="Severity.Warning" Class="mb-3" id="import-resume-alert">
-                            @(_importJob.State is JobState.Failed or JobState.Cancelled
-                                ? "The import stopped before it finished. Resuming continues after the last stage that completed."
-                                : $"{_unenriched} assets were left without AI enrichment. Resuming tries them again.")
-                            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" Class="ml-3" OnClick="ResumeAsync" id="import-resume">Resume import</MudButton>
-                        </MudAlert>
-                    }
+                    @ResumeAlert
                 }
                 <MudText Typo="Typo.body2" Class="mud-text-secondary mb-3" id="import-state">@StateText</MudText>
-                @if (_state == ImportSessionState.Ready)
-                {
-                    <ImportReview SessionId="_session.Id" />
-                }
                 <MudStack Row="true" Justify="Justify.FlexEnd" Spacing="2" Class="mt-2">
                     <MudButton Variant="Variant.Outlined" Color="Color.Error" Disabled="_busy || _state is not (ImportSessionState.Scanning or ImportSessionState.Ready)"
                                OnClick="CancelAsync" id="cancel-import">Cancel import</MudButton>
-                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_busy || _state != ImportSessionState.Ready" OnClick="ConfirmAsync" id="confirm-import">Confirm</MudButton>
                 </MudStack>
             }
         </MudStep>
 
-        <MudStep Title="Confirm" Completed="_state == ImportSessionState.Committed" Disabled="_state is not (ImportSessionState.Committing or ImportSessionState.Committed)">
-            @if (_commitJob is not null)
-            {
-                <MudPaper Outlined="true" Class="pa-3 mb-3" id="commit-progress"><JobProgressView Job="_commitJob" /></MudPaper>
-            }
-            @if (_state == ImportSessionState.Committed)
+        <MudStep Title="Results" Completed="_state == ImportSessionState.Committed && _importJob?.IsActive != true" Disabled="_state != ImportSessionState.Committed">
+            @if (_session is not null && _state == ImportSessionState.Committed)
             {
                 <MudAlert Severity="Severity.Success" Class="mb-3" id="import-committed">
-                    The import is in the catalog.@(_importJob?.IsActive == true ? " AI enrichment continues in the background." : "")
+                    The import is in the catalog.@(AiRunning ? " AI enrichment continues in the background." : "")
+                    Remove anything you do not want from Browse or Sources.
                 </MudAlert>
-                <MudStack Row="true" Justify="Justify.FlexEnd" Spacing="2">
+                @if (AiRunning)
+                {
+                    <MudPaper Outlined="true" Class="pa-3 mb-3" id="import-ai-progress"><JobProgressView Job="_importJob" /></MudPaper>
+                }
+                else
+                {
+                    @ResumeAlert
+                }
+                <ImportResultsView SessionId="_session.Id" Version="_resultsVersion" />
+                <MudStack Row="true" Justify="Justify.FlexEnd" Spacing="2" Class="mt-2">
+                    @if (AiRunning)
+                    {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Error" Disabled="_busy" OnClick="CancelAsync" id="stop-ai">Stop AI enrichment</MudButton>
+                    }
                     <MudButton Variant="Variant.Outlined" Href="browse">Browse</MudButton>
-                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Reset" id="new-import">New import</MudButton>
+                    <MudButton Variant="Variant.Outlined" Disabled="_busy" OnClick="DismissAsync" id="dismiss-results">Dismiss</MudButton>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Reset" id="new-import">Import more</MudButton>
                 </MudStack>
             }
         </MudStep>
@@ -164,8 +161,25 @@
     private ImportSessionState? _state;
     private JobSnapshot? _importJob;
     private int _unenriched; // Full-AI session assets left not enriched or failed
-    private long? _commitJobId;
-    private JobSnapshot? _commitJob;
+    private int _resultsVersion; // reloads the results view (the AI stages finished)
+
+    /// <summary>The committed import's AI stages are still running (an import without AI just finishes).</summary>
+    private bool AiRunning => _importJob is { IsActive: true } && _session is { AiDepth: not AiDepth.None };
+
+    /// <summary>The import stopped early, or Full-AI assets were left without AI: offer to resume.</summary>
+    private RenderFragment ResumeAlert => __builder =>
+    {
+        if (_importJob is { IsActive: false } job && _state is not ImportSessionState.Cancelled
+            && (job.State is JobState.Failed or JobState.Cancelled || _unenriched > 0))
+        {
+            <MudAlert Severity="Severity.Warning" Class="mb-3" id="import-resume-alert">
+                @(job.State is JobState.Failed or JobState.Cancelled
+                    ? "The import stopped before it finished. Resuming continues after the last stage that completed."
+                    : $"{_unenriched} assets were left without AI enrichment. Resuming tries them again.")
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" Class="ml-3" OnClick="ResumeAsync" id="import-resume">Resume import</MudButton>
+            </MudAlert>
+        }
+    };
 
     protected override async Task OnInitializedAsync()
     {
@@ -175,16 +189,15 @@
         Hub.Finished += OnJobFinished;
         Drops.Dropped += OnDropped;
         AddInputs(Drops.TakePending());
-        // An import that was not confirmed or cancelled (also after a restart) is shown again.
+        // A running import, or the results of the last one not dismissed yet (also after a restart), is shown again.
         if ((await Imports.OpenSessionsAsync()).FirstOrDefault() is { } open) await ShowSessionAsync(open);
     }
 
     private string StateText => _state switch
     {
-        ImportSessionState.Scanning => "Reading the inputs and generating previews. You can confirm once the previews are done.",
-        ImportSessionState.Ready => _importJob?.IsActive == true
-            ? "Previews are ready. You can confirm now; AI enrichment continues in the background after the commit."
-            : "Ready to confirm.",
+        ImportSessionState.Scanning or ImportSessionState.Ready =>
+            "Reading the inputs and generating previews. The assets are added to the catalog once their previews are done; AI enrichment continues afterwards.",
+        ImportSessionState.Committing => "Adding the assets to the catalog...",
         _ => "",
     };
 
@@ -195,9 +208,10 @@
 
     private void OnDropped() => InvokeAsync(() =>
     {
+        if (_state == ImportSessionState.Committed) Reset(); // the results stay available until the next import starts
         if (_session is not null)
         {
-            Snackbar.Add("Finish or cancel the current import before adding more inputs.", Severity.Info);
+            Snackbar.Add("Wait until the current import is in the catalog, or cancel it, before adding more inputs.", Severity.Info);
             return;
         }
         AddInputs(Drops.TakePending());
@@ -277,7 +291,7 @@
     {
         _session = session;
         await RefreshAsync();
-        _step = _state is ImportSessionState.Committing or ImportSessionState.Committed ? 2 : 1;
+        _step = _state == ImportSessionState.Committed ? 2 : 1;
     }
 
     private async Task ResumeAsync()
@@ -306,10 +320,7 @@
             ? await db.AllAssets.CountAsync(a => (a.ImportSessionId == session.Id || a.Source.CommittedFromSessionId == session.Id)
                                                  && (a.AiStatus == AiStatus.NotEnriched || a.AiStatus == AiStatus.Failed))
             : 0;
-        var payload = System.Text.Json.JsonSerializer.Serialize(new ImportPayload(session.Id), JobJson.Options);
-        _commitJobId ??= await db.Jobs.Where(j => j.Type == ImportCommitJob.JobType && j.PayloadJson == payload)
-            .OrderByDescending(j => j.Id).Select(j => (long?)j.Id).FirstOrDefaultAsync();
-        _commitJob = await SnapshotAsync(db, _commitJobId);
+        if (_state == ImportSessionState.Committed && _step == 1) _step = 2;
     }
 
     private async Task<JobSnapshot?> SnapshotAsync(AssetManager.Data.CatalogDbContext db, long? jobId)
@@ -320,31 +331,37 @@
         return job is null ? null : JobSnapshot.Of(job);
     }
 
-    private async Task ConfirmAsync()
-    {
-        if (_session is null) return;
-        _busy = true;
-        try
-        {
-            _commitJobId = await Imports.ConfirmAsync(_session.Id);
-            await RefreshAsync();
-            _step = 2;
-        }
-        catch (InvalidOperationException e)
-        {
-            Snackbar.Add(e.Message, Severity.Warning);
-        }
-        finally { _busy = false; }
-    }
-
+    /// <summary>
+    /// Before the commit this discards the import; after it, it only stops the AI work and the assets stay
+    /// (spec "Cancelling an import").
+    /// </summary>
     private async Task CancelAsync()
     {
         if (_session is null) return;
         _busy = true;
         try
         {
-            await Imports.CancelAsync(_session.Id);
-            Snackbar.Add("Import cancelled; nothing was added to the catalog.", Severity.Info);
+            if (await Imports.CancelAsync(_session.Id))
+            {
+                Snackbar.Add("Import cancelled; nothing was added to the catalog.", Severity.Info);
+                Reset();
+            }
+            else
+            {
+                Snackbar.Add("AI enrichment stopped. The imported assets stay in the catalog.", Severity.Info);
+                await RefreshAsync();
+            }
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task DismissAsync()
+    {
+        if (_session is null) return;
+        _busy = true;
+        try
+        {
+            await Imports.DismissAsync(_session.Id);
             Reset();
         }
         finally { _busy = false; }
@@ -354,8 +371,7 @@
     {
         _session = null;
         _state = null;
-        _importJob = _commitJob = null;
-        _commitJobId = null;
+        _importJob = null;
         _inputs.Clear();
         _tags.Clear();
         _ignores.Clear();
@@ -364,27 +380,27 @@
         _step = 0;
     }
 
-    private bool Watches(long jobId) => _session?.JobId == jobId || _commitJobId == jobId;
+    private bool Watches(long jobId) => _session?.JobId == jobId;
 
     private void OnJobChanged(JobSnapshot job)
     {
         if (!Watches(job.Id)) return;
         Update(async () =>
         {
-            if (_session?.JobId == job.Id)
-            {
-                _importJob = job;
-                // The session becomes ready for review once the previews are done (the AI stages follow).
-                if (_state == ImportSessionState.Scanning && job.StageIndex >= ImportStager.StageProcess + 1) await RefreshAsync();
-            }
-            else _commitJob = job;
+            _importJob = job;
+            // The assets are committed once the previews are done; the AI stages follow.
+            if (_state != ImportSessionState.Committed && job.StageIndex > ImportJob.CommitStage) await RefreshAsync();
         });
     }
 
     private void OnJobFinished(JobSnapshot job)
     {
         if (!Watches(job.Id)) return;
-        Update(RefreshAsync);
+        Update(async () =>
+        {
+            await RefreshAsync();
+            _resultsVersion++; // the AI stages may have moved skips or changed names
+        });
     }
 
     /// <summary>Runs a hub-triggered update on the renderer; failures are logged instead of vanishing with the task.</summary>

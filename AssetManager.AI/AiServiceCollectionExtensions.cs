@@ -35,12 +35,14 @@ public static class AiServiceCollectionExtensions
         services.TryAddSingleton<Enrichment.CatalogSearch>();
         services.TryAddSingleton<Import.ImportEnricher>();
         services.TryAddSingleton<Import.ImportService>();
+        services.TryAddSingleton<Import.ImportCommitter>();
+        services.AddSingleton<IStartupTask, Import.ImportRecoveryStartupTask>();
         services.AddSingleton<Core.Jobs.IJobHandler, Import.ImportJob>();
         services.AddSingleton<Core.Jobs.IJobHandler, Import.ImportCommitJob>();
         services.AddSingleton<Core.Jobs.IJobHandler, Import.EnrichAssetsJob>();
         services.AddSingleton<Core.Jobs.IJobHandler, Import.ConsensusJob>();
         services.AddSingleton<Core.Jobs.IJobHandler, Enrichment.DescribeCollectionJob>();
-        services.AddSingleton<Import.ImportReviewService>();
+        services.TryAddSingleton<Import.ImportResultsService>();
         services.TryAddSingleton<Enrichment.ReenrichService>();
         return services;
     }

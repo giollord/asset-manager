@@ -16,10 +16,12 @@ public class StagedRerenderTests
         await using var kit = await ImportKit.CreateAsync();
         var folder = Path.Combine(kit.Catalog.Dir.Path, "Pack");
         kit.Catalog.Dir.Write("Pack/rock.png", ImportStagingTests.Png(MagickColors.Gray));
-        var (session, _) = await kit.ImportAsync(new ImportRequest([folder], Depth: AiDepth.None));
+        var session = await kit.Stager.CreateSessionAsync(new ImportRequest([folder], Depth: AiDepth.None), ct);
+        await kit.Stager.ScanAndGroupAsync(session.Id, new NullProgress(), 6, ct);
+        await kit.Stager.ProcessAsync(session.Id, new NullProgress(), 6, ct);
         Asset staged;
         await using (var db = kit.Catalog.Db())
-            staged = await db.AllAssets.AsNoTracking().SingleAsync(a => a.ImportSessionId == session, ct);
+            staged = await db.AllAssets.AsNoTracking().SingleAsync(a => a.ImportSessionId == session.Id, ct);
 
         var previews = await new CatalogPreviewRerenderer(kit.Store, kit.Previews).RerenderAsync(staged, ct);
 

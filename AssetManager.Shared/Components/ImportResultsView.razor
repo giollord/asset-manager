@@ -1,0 +1,79 @@
+@using AssetManager.AI.Import
+@using AssetManager.Core.Search
+@inject ImportResultsService Results
+
+@* The import results (spec "Import results"): per source what the commit added or replaced, and the skipped items. *@
+<div id="import-results">
+    @if (_model is null)
+    {
+        <MudProgressLinear Indeterminate="true" />
+    }
+    else
+    {
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-2" id="import-results-summary">
+            @Count(_model.Assets, "asset") in @Count(_model.Sources.Count(s => s.SourceId != 0), "source")@(_model.Replaced > 0 ? $" · {_model.Replaced} replaced" : "") · @_model.Skipped skipped
+        </MudText>
+        @foreach (var source in _model.Sources)
+        {
+            <MudPaper Outlined="true" Class="pa-3 mb-2 result-source" data-id="@source.SourceId">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Spacing="2">
+                    @if (source.Exists)
+                    {
+                        <MudLink Href="@BrowseHref(source.SourceId)" Typo="Typo.subtitle1" Class="result-source-name">@source.Name</MudLink>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.subtitle1" Class="result-source-name">@source.Name</MudText>
+                    }
+                    @if (source.SourceId != 0)
+                    {
+                        <MudText Typo="Typo.body2" Class="result-added">@Added(source)</MudText>
+                    }
+                    @if (source.Replaced)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined" Class="result-replaced"
+                                 Text="@($"new version: {source.Updated} updated, {source.Added} added, {source.Removed} removed")" />
+                    }
+                </MudStack>
+                @if (source.Skips.Count > 0)
+                {
+                    <MudExpansionPanels Elevation="0" Class="mt-2">
+                        <MudExpansionPanel Text="@($"{source.Skips.Count} skipped")" Class="result-skips">
+                            <MudSimpleTable Dense="true" Hover="true">
+                                <tbody>
+                                    @foreach (var skip in source.Skips)
+                                    {
+                                        <tr class="result-skip"><td style="overflow-wrap: anywhere">@skip.Path</td><td>@skip.Reason</td></tr>
+                                    }
+                                </tbody>
+                            </MudSimpleTable>
+                        </MudExpansionPanel>
+                    </MudExpansionPanels>
+                }
+            </MudPaper>
+        }
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public long SessionId { get; set; }
+
+    /// <summary>Changes when the results should be loaded again (e.g. the AI stages finished).</summary>
+    [Parameter] public int Version { get; set; }
+
+    private ImportResults? _model;
+    private (long, int)? _loaded;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loaded == (SessionId, Version)) return;
+        _loaded = (SessionId, Version);
+        _model = await Results.LoadAsync(SessionId);
+    }
+
+    private static string Count(int n, string noun) => n == 1 ? $"1 {noun}" : $"{n:N0} {noun}s";
+
+    private static string Added(ResultSource s) => Count(s.Assets, "asset");
+
+    private static string BrowseHref(long sourceId) => "browse?q=" + new SearchQuery { SourceId = sourceId }.ToToken();
+}

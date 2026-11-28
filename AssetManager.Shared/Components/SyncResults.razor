@@ -20,7 +20,7 @@
 @inject NavigationManager Nav
 
 @* The latest rescan and library scan results (specs "Acting on rescan results", "Library folders"). The results live
-   in the jobs' summaries, not in the catalog; acting on them goes through the staged import, re-import and deletion. *@
+   in the jobs' summaries, not in the catalog; acting on them goes through import, re-import and deletion. *@
 <MudPaper Outlined="true" Class="pa-4" id="sync-results">
     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
         <MudIcon Icon="@Icons.Material.Filled.Sync" Color="Color.Primary" />
@@ -91,13 +91,14 @@
                         @if (r.ContainerChanged && r.Path is { } path)
                         {
                             <MudButton Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Upgrade" Class="rescan-update"
-                                       title="Imports the changed file; the import review shows it as a new version of this source"
-                                       OnClick="() => UpdateAsync([path])">Update source</MudButton>
+                                       title="Imports the changed file again as the new version of this source; it replaces the source without asking"
+                                       OnClick="() => UpdateAsync(path, r.SourceId)">Update source</MudButton>
                         }
                         @foreach (var nested in r.Changed.Where(c => c.AssetId is null && r.Path is not null))
                         {
                             <MudButton Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Upgrade" Class="rescan-update-nested"
-                                       OnClick="() => UpdateAsync([System.IO.Path.Combine(r.Path!, nested.RelativePath)])">Update @nested.RelativePath</MudButton>
+                                       title="Imports the changed file again as the new version of its source; it replaces that source without asking"
+                                       OnClick="() => UpdateAsync(System.IO.Path.Combine(r.Path!, nested.RelativePath), nested.SourceId)">Update @nested.RelativePath</MudButton>
                         }
                     </MudStack>
                 }
@@ -210,18 +211,22 @@
 
     private bool Done(RescanResult r, string action) => _done.Contains($"{r.SourceId}:{action}");
 
-    /// <summary>The added files go through the staged import review, assigned to this source.</summary>
+    /// <summary>The added files are imported into this source; they reach the catalog once their previews are done.</summary>
     private Task ImportAddedAsync(RescanResult r) => StartImportAsync(new ImportRequest([r.Path!], Depth: Settings.Current.DefaultAiDepth,
         IntoSourceId: r.SourceId, OnlyPaths: r.Added.Select(a => a.RelativePath).ToList()), () => _done.Add($"{r.SourceId}:added"));
 
-    /// <summary>A changed package or archive is imported again; the review offers it as a new version of its source.</summary>
-    private Task UpdateAsync(IReadOnlyList<string> paths) => StartImportAsync(new ImportRequest(paths, Depth: Settings.Current.DefaultAiDepth));
+    /// <summary>
+    /// A changed package or archive is imported again and replaces its source (spec "Explicit update"). A nested one
+    /// whose source is unknown (an older rescan result) is imported like any file and replaces only on a store id.
+    /// </summary>
+    private Task UpdateAsync(string path, long? sourceId) =>
+        StartImportAsync(new ImportRequest([path], Depth: Settings.Current.DefaultAiDepth, ReplaceSourceId: sourceId));
 
     private async Task StartImportAsync(ImportRequest request, Action? started = null)
     {
-        if ((await Imports.OpenSessionsAsync()).Count > 0)
+        if (await Imports.AnyRunningAsync())
         {
-            Snackbar.Add("Finish or cancel the open import first.", Severity.Warning);
+            Snackbar.Add("Wait until the running import is in the catalog, or cancel it, first.", Severity.Warning);
             return;
         }
         if (await Ui.RunAsync(() => Imports.StartAsync(request)) is not null)
@@ -254,7 +259,10 @@
 
     private void ChooseAll() => _chosen.UnionWith(_library!.Entries.Select(e => e.Path));
 
-    /// <summary>The chosen packs in one staged import; new versions are proposed as replacements in its review.</summary>
+    /// <summary>
+    /// The chosen packs in one import. Packs with the Asset Store id of a cataloged source replace it; packs marked as a
+    /// new version only by their paths are imported as new sources.
+    /// </summary>
     private Task ImportChosenAsync() =>
         StartImportAsync(new ImportRequest([.. _library!.Entries.Where(e => _chosen.Contains(e.Path)).Select(e => e.Path)], Depth: Settings.Current.DefaultAiDepth));
 

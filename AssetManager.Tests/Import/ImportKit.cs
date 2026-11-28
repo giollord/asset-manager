@@ -34,7 +34,8 @@ public sealed class ImportKit : IAsyncDisposable
     public PreviewService Previews { get; private set; } = null!;
     public SourceVersions Versions { get; private set; } = null!;
     public ReimportService Reimports { get; private set; } = null!;
-    public ImportReviewService Review { get; private set; } = null!;
+    public ImportResultsService Results { get; private set; } = null!;
+    public ImportCommitter Committer { get; private set; } = null!;
     public AssetManager.Processing.Sync.RescanService Rescan { get; private set; } = null!;
 
     /// <summary>The app settings file the library scan reads (library folders, startup check).</summary>
@@ -74,7 +75,8 @@ public sealed class ImportKit : IAsyncDisposable
             Parallelism = () => parallelism,
             Settings = () => kit.AppSettings,
         };
-        kit.Jobs = new JobQueue(store, [new ImportJob(store, kit.Stager, kit.Enricher), new ImportCommitJob(store, late, kit.Versions),
+        kit.Committer = new ImportCommitter(store, late, kit.Versions);
+        kit.Jobs = new JobQueue(store, [new ImportJob(store, kit.Stager, kit.Enricher, kit.Committer), new ImportCommitJob(store, late, kit.Committer),
             new ReimportJob(store, kit.Processing.Resolver, kit.Previews, previewSettings, late), new EnrichAssetsJob(kit.Enricher),
             new ConsensusJob(kit.Enricher), new AssetManager.Processing.Jobs.RedetectSpritesJob(kit.Previews, store),
             new AssetManager.Processing.Sync.RescanJob(kit.Rescan = new AssetManager.Processing.Sync.RescanService(store, kit.Processing.Resolver, classification, kit.Processing.Readers)),
@@ -84,12 +86,11 @@ public sealed class ImportKit : IAsyncDisposable
         await kit.Jobs.StartAsync();
         kit.Imports = new ImportService(store, kit.Stager, kit.Jobs);
         kit.Reimports = new ReimportService(kit.Jobs);
-        kit.Review = new ImportReviewService(store, kit.Jobs, new AssetManager.Data.Services.MetadataEditService(store),
-            new AssetManager.Data.Services.TagService(store), new StagedRegrouping(store, classification, kit.Previews, previewSettings));
+        kit.Results = new ImportResultsService(store);
         return kit;
     }
 
-    /// <summary>Starts an import and waits until its job has finished.</summary>
+    /// <summary>Starts an import and waits until its job has finished (it commits the import by itself).</summary>
     public async Task<(long SessionId, JobSnapshot Job)> ImportAsync(ImportRequest request)
     {
         var session = await Imports.StartAsync(request, TestContext.Current.CancellationToken);
@@ -97,19 +98,16 @@ public sealed class ImportKit : IAsyncDisposable
         return (session.Id, job);
     }
 
-    /// <summary>Imports and confirms; returns the session id.</summary>
+    /// <summary>Imports into the catalog and checks the job succeeded; returns the session id.</summary>
     public async Task<long> CatalogAsync(ImportRequest request)
     {
-        var ct = TestContext.Current.CancellationToken;
         var (session, import) = await ImportAsync(request);
         Assert.True(import.State == JobState.Completed, import.Error);
-        var commit = await Jobs.WaitAsync(await Imports.ConfirmAsync(session, ct), ct);
-        Assert.True(commit.State == JobState.Completed, commit.Error);
         return session;
     }
 
-    /// <summary>Waits until the session's previews are done and it can be confirmed.</summary>
-    public async Task WaitReadyAsync(long sessionId)
+    /// <summary>Waits until the session is committed (its previews are done; the AI stages may still run).</summary>
+    public async Task WaitCommittedAsync(long sessionId)
     {
         var ct = TestContext.Current.CancellationToken;
         var deadline = DateTime.UtcNow.AddSeconds(60);
@@ -118,9 +116,9 @@ public sealed class ImportKit : IAsyncDisposable
             await using (var db = Catalog.Db())
             {
                 var state = await db.ImportSessions.Where(s => s.Id == sessionId).Select(s => s.State).FirstAsync(ct);
-                if (state != ImportSessionState.Scanning) return;
+                if (state is ImportSessionState.Committed or ImportSessionState.Cancelled) return;
             }
-            if (DateTime.UtcNow > deadline) throw new TimeoutException("Import session never became ready.");
+            if (DateTime.UtcNow > deadline) throw new TimeoutException("Import session was never committed.");
             await Task.Delay(50, ct);
         }
     }

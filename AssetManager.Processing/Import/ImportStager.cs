@@ -17,14 +17,15 @@ namespace AssetManager.Processing.Import;
 /// <summary>What the user started an import with (design D8).</summary>
 /// <param name="IgnoredFolders">Folder ignore rules for this import only, added to the defaults.</param>
 /// <param name="UseDefaultIgnores">Apply the catalog's default ignored folders.</param>
+/// <param name="ReplaceSourceId">"Update source": the single input replaces this cataloged source as its new version.</param>
 public sealed record ImportRequest(IReadOnlyList<string> Inputs, IReadOnlyList<string>? SharedTags = null, string? Instruction = null,
     AiDepth Depth = AiDepth.Full, bool IncludeDuplicates = false, IReadOnlyList<string>? IgnoredFolders = null, bool UseDefaultIgnores = true,
-    long? IntoSourceId = null, IReadOnlyList<string>? OnlyPaths = null);
+    long? IntoSourceId = null, IReadOnlyList<string>? OnlyPaths = null, long? ReplaceSourceId = null);
 
 /// <summary>
 /// Stages an import (design D8): scan the inputs through the virtual file system, group files into assets with their
 /// companions, then extract metadata and render previews, all into staging rows (sources and assets whose
-/// <c>ImportSessionId</c> is set, plus <see cref="StagedSkip"/> rows). Nothing is visible in the catalog until confirm.
+/// <c>ImportSessionId</c> is set, plus <see cref="StagedSkip"/> rows). Nothing is visible in the catalog until the commit.
 /// Each stage can be repeated after an interruption.
 /// </summary>
 public sealed class ImportStager(
@@ -61,10 +62,15 @@ public sealed class ImportStager(
             UseDefaultIgnores = request.UseDefaultIgnores,
             IntoSourceId = request.IntoSourceId,
             OnlyPaths = request.OnlyPaths?.Select(OnlyKey).Distinct().ToList(),
+            ReplaceSourceId = request.ReplaceSourceId,
         };
         if (session.IntoSourceId is not null && (session.Inputs.Count != 1 || !Directory.Exists(session.Inputs[0])))
             throw new ArgumentException("Importing into an existing source needs its folder as the only input.", nameof(request));
+        if (session.ReplaceSourceId is not null && (session.Inputs.Count != 1 || session.IntoSourceId is not null))
+            throw new ArgumentException("Updating a source needs its file or folder as the only input.", nameof(request));
         await using var db = catalog.CreateDbContext();
+        if (session.ReplaceSourceId is { } replace && !await db.Sources.AnyAsync(s => s.Id == replace, ct))
+            throw new InvalidOperationException("The source to update is no longer in the catalog.");
         db.ImportSessions.Add(session);
         await db.SaveChangesAsync(ct);
         return session;

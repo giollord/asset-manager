@@ -21,15 +21,15 @@ An import session SHALL show progress per stage and overall, both in the import 
 1. scan
 2. grouping
 3. metadata and previews
-4. AI pack pass
-5. AI item pass
-6. commit
+4. commit
+5. AI pack pass
+6. AI item pass
 
-For source version updates, the commit stage SHALL report updated, added and removed counts.
+The commit SHALL start on its own once metadata and previews are done. For source version updates, the commit stage SHALL report updated, added and removed counts.
 
 #### Scenario: Stages visible in wizard
 - **WHEN** an import is in the AI item pass
-- **THEN** the wizard shows the earlier stages as complete, the item pass with its done/total count, and the overall percentage
+- **THEN** the wizard shows the earlier stages as complete, including the commit, the item pass with its done/total count, and the overall percentage
 
 #### Scenario: Version update counts
 - **WHEN** a source version update is committed

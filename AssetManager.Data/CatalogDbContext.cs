@@ -156,6 +156,8 @@ public class CatalogDbContext(DbContextOptions<CatalogDbContext> options) : DbCo
             e.HasIndex(x => x.JobId);
         });
 
+        b.Entity<ImportSession>(e => JsonColumn(e.Property(s => s.Results)));
+
         b.Entity<StagedSkip>(e =>
         {
             e.HasOne<ImportSession>().WithMany().HasForeignKey(x => x.SessionId).OnDelete(DeleteBehavior.Cascade);

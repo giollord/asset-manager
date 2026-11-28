@@ -384,6 +384,15 @@ namespace AssetManager.Data.Migrations
                     b.PrimitiveCollection<string>("OnlyPaths")
                         .HasColumnType("TEXT");
 
+                    b.Property<long?>("ReplaceSourceId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Results")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("ResultsDismissed")
+                        .HasColumnType("INTEGER");
+
                     b.PrimitiveCollection<string>("SharedTags")
                         .IsRequired()
                         .HasColumnType("TEXT");

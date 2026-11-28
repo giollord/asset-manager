@@ -56,7 +56,6 @@ public static class ProcessingServiceCollectionExtensions
         services.AddSingleton<IStartupTask, VolumeChangeStartupTask>();
         services.TryAddSingleton<Import.DuplicateDetector>();
         services.TryAddSingleton<Import.SourceVersions>();
-        services.TryAddSingleton<Import.StagedRegrouping>();
         services.TryAddSingleton<Import.ImportStager>();
         services.AddSingleton<Core.Jobs.IJobHandler, Jobs.RegeneratePreviewsJob>();
         services.AddSingleton<Core.Jobs.IJobHandler, Jobs.ApplyTextureSuggestionsJob>();

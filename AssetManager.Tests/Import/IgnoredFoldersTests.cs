@@ -16,9 +16,9 @@ public class IgnoredFoldersTests
     private static async Task<(List<string> Staged, List<StagedSkip> Skips, List<string> Sources)> StagedAsync(ImportKit kit, long session)
     {
         await using var db = kit.Catalog.Db();
-        var staged = await db.AllAssets.Where(a => a.ImportSessionId == session).SelectMany(a => a.Files).Select(f => f.RelativePath).ToListAsync(Ct);
+        var staged = await db.AllAssets.Where(a => a.Source.CommittedFromSessionId == session).SelectMany(a => a.Files).Select(f => f.RelativePath).ToListAsync(Ct);
         var skips = await db.StagedSkips.Where(s => s.SessionId == session).ToListAsync(Ct);
-        var sources = await db.AllSources.Where(s => s.ImportSessionId == session).Select(s => s.DisplayName).ToListAsync(Ct);
+        var sources = await db.AllSources.Where(s => s.CommittedFromSessionId == session).Select(s => s.DisplayName).ToListAsync(Ct);
         return (staged.Select(p => p.Replace('\\', '/')).ToList(), skips, sources);
     }
 

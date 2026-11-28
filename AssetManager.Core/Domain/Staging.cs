@@ -19,7 +19,8 @@ public enum SkipKind
 
 /// <summary>
 /// A staged import. Staged sources and assets are ordinary <see cref="Source"/>/<see cref="Asset"/> rows whose
-/// <c>ImportSessionId</c> is set; global query filters hide them from the catalog until confirm clears it.
+/// <c>ImportSessionId</c> is set; global query filters hide them from the catalog until the commit (right after the
+/// previews) clears it.
 /// </summary>
 public class ImportSession
 {
@@ -35,15 +36,30 @@ public class ImportSession
     public List<string> IgnoredFolders { get; set; } = [];
     /// <summary>Whether the catalog's default ignored folders apply to this import.</summary>
     public bool UseDefaultIgnores { get; set; } = true;
-    /// <summary>Import into this existing source (spec "Acting on rescan results"): its staged root merges into it on confirm.</summary>
+    /// <summary>Import into this existing source (spec "Acting on rescan results"): its staged root merges into it on commit.</summary>
     public long? IntoSourceId { get; set; }
     /// <summary>When set, only these paths (relative to the single input folder) are staged: the files a rescan found added.</summary>
     public List<string>? OnlyPaths { get; set; }
+    /// <summary>
+    /// The cataloged source this import replaces (spec "Update source from new version": an explicit "Update source");
+    /// it applies to the session's single root source.
+    /// </summary>
+    public long? ReplaceSourceId { get; set; }
+    /// <summary>What the commit added and replaced, per source (spec "Import results"); null before the commit.</summary>
+    public List<ImportSourceResult>? Results { get; set; }
+    /// <summary>The user dismissed the import results; the session is no longer shown on the Import page.</summary>
+    public bool ResultsDismissed { get; set; }
     public long? JobId { get; set; }
     /// <summary>Last staging stage that finished (0 none, 1 scan, 2 grouping, 3 metadata and previews, 4 pack pass, 5 item pass).</summary>
     public int StagedThrough { get; set; }
     public string? Error { get; set; }
 }
+
+/// <summary>
+/// One committed source of an import (spec "Import results"): the catalog source the assets ended up in and how many
+/// were added; for a replaced source, the updated, added and removed counts of the new version.
+/// </summary>
+public sealed record ImportSourceResult(long SourceId, string Name, int Assets, bool Replaced = false, int Updated = 0, int Added = 0, int Removed = 0);
 
 /// <summary>An entry that will not become an asset, with the reason (script, duplicate, unsupported, error).</summary>
 public class StagedSkip

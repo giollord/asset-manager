@@ -58,7 +58,7 @@ public class Source
 
     // Staging (see ImportSession). Null ImportSessionId = committed catalog row.
     public long? ImportSessionId { get; set; }
-    /// <summary>The import session that created this source (kept after confirm, so unfinished AI work can find it).</summary>
+    /// <summary>The import session that created this source (kept after the commit, so the AI stages that follow can find it).</summary>
     public long? CommittedFromSessionId { get; set; }
     /// <summary>Error that prevented reading the source (corrupt/encrypted archive).</summary>
     public string? Error { get; set; }
@@ -130,7 +130,7 @@ public class Asset
 
     // Staging (see ImportSession). Null ImportSessionId = committed catalog row.
     public long? ImportSessionId { get; set; }
-    /// <summary>Staged item will be created on confirm.</summary>
+    /// <summary>Staged item will be committed; false for a duplicate of a cataloged file, which the commit skips.</summary>
     public bool Included { get; set; } = true;
     public long? DuplicateOfAssetId { get; set; }
     /// <summary>For a new source version: the existing asset this staged asset updates in place.</summary>

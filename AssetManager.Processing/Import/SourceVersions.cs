@@ -10,11 +10,11 @@ namespace AssetManager.Processing.Import;
 public sealed record VersionDiff(IReadOnlyList<(long Staged, long Old)> Updated, IReadOnlyList<long> Added, IReadOnlyList<long> Removed);
 
 /// <summary>
-/// New package versions (design D8, spec "Update source from new version"). A staged source is compared with the
-/// committed sources: score 1 for the same Asset Store id, otherwise the Jaccard overlap of the Unity GUID sets
-/// (or of the relative-path sets when there are no GUIDs). A best score of at least <see cref="Threshold"/> proposes
-/// replacing that source. On confirm, matched assets update in place (keeping their ids, user edits and user tags),
-/// new ones are added and missing ones removed.
+/// New package versions (spec "Update source from new version"). A staged source replaces a committed one when it has
+/// the same Asset Store id, or when the user started the import with "Update source" for it. The Jaccard overlap of
+/// relative paths (at least <see cref="Threshold"/>) only marks library entries as likely new versions; it replaces
+/// nothing. On commit, matched assets update in place (keeping their ids, user edits and user tags), new ones are
+/// added and missing ones removed.
 /// </summary>
 public sealed class SourceVersions(CatalogStore catalog, ILogger<SourceVersions>? logger = null)
 {
@@ -30,33 +30,28 @@ public sealed class SourceVersions(CatalogStore catalog, ILogger<SourceVersions>
 
     private static string PathKey(string relativePath) => relativePath.Replace('\\', '/').ToLowerInvariant();
 
-    /// <summary>Sets <see cref="Source.ReplacesSourceId"/> on the session's staged sources that look like new versions.</summary>
-    /// <returns>The number of proposals.</returns>
+    /// <summary>
+    /// Decides which of the session's staged sources replace a cataloged one (spec "Update source from new version"):
+    /// the same Asset Store id, or the source the user chose "Update source" for. Those get
+    /// <see cref="Source.ReplacesSourceId"/> with <see cref="Source.ReplaceAccepted"/> set; an overlap of GUIDs or
+    /// paths alone replaces nothing, and the source is imported as a new one.
+    /// </summary>
+    /// <returns>The number of replacements.</returns>
     public async Task<int> ProposeAsync(long sessionId, CancellationToken ct = default)
     {
         await using var db = catalog.CreateDbContext();
         var staged = await db.AllSources.Where(s => s.ImportSessionId == sessionId).ToListAsync(ct);
+        var chosen = await db.ImportSessions.Where(s => s.Id == sessionId).Select(s => s.ReplaceSourceId).FirstOrDefaultAsync(ct);
+        if (chosen is { } c && !await db.Sources.AnyAsync(s => s.Id == c, ct)) chosen = null; // deleted since the import started
         var proposals = 0;
         foreach (var source in staged)
         {
-            var keys = await KeysAsync(db, source.Id, ct);
             (long Id, double Score)? best = null;
-            if (source.Store.StoreId is { Length: > 0 } storeId)
+            if (chosen is { } target && source.ParentSourceId is null) best = (target, 1);
+            else if (source.Store.StoreId is { Length: > 0 } storeId)
             {
                 var same = await db.Sources.Where(s => s.Store.StoreId == storeId).OrderByDescending(s => s.ImportedAt).Select(s => s.Id).FirstOrDefaultAsync(ct);
                 if (same != 0) best = (same, 1);
-            }
-            if (best is null && keys.Set.Count > 0)
-            {
-                foreach (var candidate in await CandidatesAsync(db, keys, ct))
-                {
-                    var other = await KeysAsync(db, candidate, ct);
-                    var a = keys.Guids.Count > 0 && other.Guids.Count > 0 ? keys.Guids : keys.Paths;
-                    var b = keys.Guids.Count > 0 && other.Guids.Count > 0 ? other.Guids : other.Paths;
-                    var union = a.Count + b.Count - a.Count(b.Contains);
-                    var score = union == 0 ? 0 : (double)a.Count(b.Contains) / union;
-                    if (score >= Threshold && (best is null || score > best.Value.Score)) best = (candidate, score);
-                }
             }
             if (best is not { } match) continue;
             // The same content again (a re-added folder) is not a new version: its files are skipped as duplicates.
@@ -66,13 +61,14 @@ public sealed class SourceVersions(CatalogStore catalog, ILogger<SourceVersions>
             if (stagedAssets > 0 && unchanged == stagedAssets && await oldIds.CountAsync(ct) == stagedAssets) continue;
             source.ReplacesSourceId = match.Id;
             source.ReplaceScore = match.Score;
+            source.ReplaceAccepted = true;
             // Unchanged files of the old version are updates, not skipped duplicates.
             await db.AllAssets.Where(a => a.SourceId == source.Id && a.DuplicateOfAssetId != null && oldIds.Contains(a.DuplicateOfAssetId))
                 .ExecuteUpdateAsync(u => u.SetProperty(a => a.Included, true), ct);
             proposals++;
         }
         await db.SaveChangesAsync(ct);
-        if (proposals > 0) _log.LogInformation("Import {Session}: {Count} sources look like new versions of cataloged ones", sessionId, proposals);
+        if (proposals > 0) _log.LogInformation("Import {Session}: {Count} sources replace cataloged ones as new versions", sessionId, proposals);
         return proposals;
     }
 

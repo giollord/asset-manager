@@ -48,25 +48,31 @@ public sealed class ImportEnricher(
     /// <summary>The app settings (consensus thresholds). Tests replace it.</summary>
     public Func<Core.Settings.AppSettings> Settings { get; init; } = () => runtime.Settings;
 
+    /// <summary>
+    /// <see cref="ImportSession.StagedThrough"/> once the pack pass (4) or the item pass (5) is done. Stored values,
+    /// independent of the stage numbers the job shows (the commit now comes before the AI stages).
+    /// </summary>
+    public const int PackPassDone = 4, ItemPassDone = 5;
+
     public async Task PackPassAsync(long sessionId, IJobProgress progress, int stage, int stageCount, CancellationToken ct)
     {
         var session = await SessionAsync(sessionId, ct);
         var sourceIds = await SourceIdsAsync(sessionId, ct);
         progress.SetStage("AI pack pass", stage, stageCount, sourceIds.Count);
-        if (session.AiDepth != AiDepth.None && session.StagedThrough < stage + 1) await WaitForModelAsync(progress, ct);
-        if (session.AiDepth == AiDepth.None || session.StagedThrough >= stage + 1 || Chat() is not { } client)
+        if (session.AiDepth != AiDepth.None && session.StagedThrough < PackPassDone) await WaitForModelAsync(progress, ct);
+        if (session.AiDepth == AiDepth.None || session.StagedThrough >= PackPassDone || Chat() is not { } client)
         {
             // Only when this pass actually needed the model: a resumed job skips a finished pass without waiting for it.
-            if (session.AiDepth != AiDepth.None && session.StagedThrough < stage + 1 && Chat() is null) await NotEnrichedAsync(sessionId, progress, ct);
+            if (session.AiDepth != AiDepth.None && session.StagedThrough < PackPassDone && Chat() is null) await NotEnrichedAsync(sessionId, progress, ct);
             progress.Advance(sourceIds.Count);
-            await MarkStageAsync(sessionId, stage + 1, ct);
+            await MarkStageAsync(sessionId, PackPassDone, ct);
             return;
         }
         var chat = new StructuredChat(client, _log);
         var classifier = new FileClassifier(await classification.GetAsync(ct));
 
-        // Sources are picked one at a time: a confirm during this pass can replace a staged source with an existing one
-        // (new version), which then needs the pass instead.
+        // Sources are picked one at a time: the list can change while the pass runs (a commit queued by an earlier
+        // version can replace a staged source with an existing one, which then needs the pass instead).
         var attempted = new HashSet<long>();
         while (true)
         {
@@ -79,7 +85,8 @@ public sealed class ImportEnricher(
             var source = await db.AllSources.FirstOrDefaultAsync(s => s.Id == sourceId, ct);
             if (source is null) { progress.Advance(1); continue; }
             if (source.Description is not null) { progress.Advance(1, source.DisplayName); continue; } // done before a restart
-            var assets = await db.AllAssets.Include(a => a.Files).Where(a => a.SourceId == sourceId).ToListAsync(ct);
+            // Tags too: the assets can already have a pack tag (a shared tag of the import, AI tags copied from an identical asset).
+            var assets = await db.AllAssets.Include(a => a.Files).Include(a => a.Tags).Where(a => a.SourceId == sourceId).ToListAsync(ct);
             var skips = await db.StagedSkips.AsNoTracking().Where(s => s.SourceId == sourceId).ToListAsync(ct);
             if (assets.Count == 0 && !skips.Any(s => s.Kind is SkipKind.Noted or SkipKind.Document)) { progress.Advance(1); continue; }
             progress.SetCurrentItem(source.DisplayName);
@@ -109,7 +116,7 @@ public sealed class ImportEnricher(
             }
             progress.Advance(1, source.DisplayName);
         }
-        await MarkStageAsync(sessionId, stage + 1, ct);
+        await MarkStageAsync(sessionId, PackPassDone, ct);
         catalog.NotifyContentChanged();
     }
 
@@ -127,7 +134,7 @@ public sealed class ImportEnricher(
         {
             if (pending.Count > 0 && session.AiDepth == AiDepth.Full && Chat() is null) await NotEnrichedAsync(sessionId, progress, ct);
             progress.Advance(pending.Count);
-            await MarkStageAsync(sessionId, stage + 1, ct);
+            await MarkStageAsync(sessionId, ItemPassDone, ct);
             return;
         }
         var chat = new StructuredChat(client, _log);
@@ -136,7 +143,7 @@ public sealed class ImportEnricher(
         {
             attempted.UnionWith(pending);
             await EnrichAssetsAsync(chat, pending, session.Instruction, null, progress, ct);
-            // A confirm during this pass can turn cataloged assets of a replaced version pending again.
+            // A commit during this pass (queued by an earlier version) can turn assets of a replaced version pending again.
             sourceIds = await SourceIdsAsync(sessionId, ct);
             await using var db = catalog.CreateDbContext();
             pending = (await db.AllAssets.Where(a => sourceIds.Contains(a.SourceId) && a.AiStatus == AiStatus.Pending).OrderBy(a => a.Id)
@@ -145,7 +152,7 @@ public sealed class ImportEnricher(
         }
         await ConsensusAsync(chat, await SourceIdsAsync(sessionId, ct), progress, ct);
         await PackTexturesAsync(await SourceIdsAsync(sessionId, ct), progress, ct);
-        await MarkStageAsync(sessionId, stage + 1, ct);
+        await MarkStageAsync(sessionId, ItemPassDone, ct);
     }
 
     /// <summary>
@@ -388,7 +395,7 @@ public sealed class ImportEnricher(
     }
 
     /// <summary>
-    /// Saves AI results, leaving out rows a confirm removed meanwhile: a new package version replaces staged assets
+    /// Saves AI results, leaving out rows the commit removed meanwhile: a new package version replaces staged assets
     /// and sources with the existing ones, which the passes then pick up as pending.
     /// </summary>
     private async Task SaveSurvivingAsync(CatalogDbContext db, CancellationToken ct)
@@ -415,7 +422,7 @@ public sealed class ImportEnricher(
         }
         catch (DbUpdateConcurrencyException e)
         {
-            _log.LogInformation("AI results for rows removed by a confirm were dropped: {Error}", e.Message);
+            _log.LogInformation("AI results for rows removed by the commit were dropped: {Error}", e.Message);
             db.ChangeTracker.Clear();
         }
     }
@@ -505,11 +512,14 @@ public sealed class ImportEnricher(
         return await db.ImportSessions.AsNoTracking().FirstAsync(s => s.Id == sessionId, ct);
     }
 
-    /// <summary>The session's sources: staged ones, or (after confirm) the committed sources it created.</summary>
+    /// <summary>The session's sources: staged ones, or (after the commit) the committed sources it created or imported into.</summary>
     private async Task<List<long>> SourceIdsAsync(long sessionId, CancellationToken ct)
     {
         await using var db = catalog.CreateDbContext();
-        return await db.AllSources.Where(s => s.ImportSessionId == sessionId || s.CommittedFromSessionId == sessionId).OrderBy(s => s.Id).Select(s => s.Id).ToListAsync(ct);
+        // Files imported into an existing source are committed into it before the AI stages run.
+        var into = await db.ImportSessions.Where(s => s.Id == sessionId).Select(s => s.IntoSourceId).FirstOrDefaultAsync(ct);
+        return await db.AllSources.Where(s => s.ImportSessionId == sessionId || s.CommittedFromSessionId == sessionId || s.Id == into)
+            .OrderBy(s => s.Id).Select(s => s.Id).ToListAsync(ct);
     }
 
     private async Task MarkStageAsync(long sessionId, int through, CancellationToken ct)

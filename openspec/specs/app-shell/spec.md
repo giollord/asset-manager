@@ -42,7 +42,7 @@ The app SHALL provide the following sections:
 - Browse/Search
 - Collections
 - Sources
-- Import (including any staged sessions)
+- Import (including running imports and the results of the last one)
 - Background Jobs/Progress
 - Settings
 

@@ -27,13 +27,11 @@ public class ImportVersionTests
         return (v1, v2);
     }
 
-    /// <summary>Imports and confirms the first version, then gives "rock" a user tag and a user-edited name.</summary>
+    /// <summary>Imports the first version, then gives "rock" a user tag and a user-edited name.</summary>
     private static async Task<(long SourceId, long RockId)> CatalogFirstVersionAsync(ImportKit kit, string v1)
     {
         var ct = TestContext.Current.CancellationToken;
-        var (session, _) = await kit.ImportAsync(new ImportRequest([v1], Depth: AiDepth.None));
-        var commit = await kit.Jobs.WaitAsync(await kit.Imports.ConfirmAsync(session, ct), ct);
-        Assert.True(commit.State == JobState.Completed, commit.Error);
+        await kit.CatalogAsync(new ImportRequest([v1], Depth: AiDepth.None));
         await using var db = kit.Catalog.Db();
         var rock = await db.Assets.Include(a => a.Tags).SingleAsync(a => a.Name == "rock", ct);
         var favorite = (await TagService.GetOrCreateAsync(db, ["favorite"], ct)).Single();
@@ -46,7 +44,7 @@ public class ImportVersionTests
     }
 
     [Fact]
-    public async Task Renamed_package_version_is_proposed_with_counts()
+    public async Task Renamed_package_version_replaces_the_source_with_counts()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var kit = await ImportKit.CreateAsync();
@@ -56,19 +54,14 @@ public class ImportVersionTests
         var (session, job) = await kit.ImportAsync(new ImportRequest([v2], Depth: AiDepth.None));
 
         Assert.True(job.State == JobState.Completed, job.Error);
+        Assert.Contains("\"replaced\":1", job.SummaryJson);
+        // The import results show the counts ("Version update counts"); the unchanged texture is an update, not a duplicate.
+        var results = (await kit.Results.LoadAsync(session, ct))!;
+        var replaced = results.Sources.Single();
+        Assert.Equal((oldSource, "Game Kit Controller", true, 2, 1, 1), (replaced.SourceId, replaced.Name, replaced.Replaced, replaced.Updated, replaced.Added, replaced.Removed));
+        Assert.DoesNotContain(replaced.Skips, s => s.Kind == SkipKind.Duplicate);
         await using var db = kit.Catalog.Db();
-        var staged = await db.AllSources.SingleAsync(s => s.ImportSessionId == session, ct);
-        Assert.Equal((oldSource, 1.0), (staged.ReplacesSourceId, staged.ReplaceScore));
-        var diff = await SourceVersions.DiffAsync(db, staged.Id, oldSource, ct);
-        Assert.Equal((2, 1, 1), (diff.Updated.Count, diff.Added.Count, diff.Removed.Count));
-        // The review step shows the proposal with these counts ("Version update counts").
-        var review = (await kit.Review.LoadAsync(session, ct))!.Sources.Single(s => s.Id == staged.Id).Replacement!;
-        Assert.Equal(("Game Kit Controller", 2, 1, 1), (review.OldName, review.Updated, review.Added, review.Removed));
-        var grassItem = (await kit.Review.LoadAsync(session, ct))!.Sources.SelectMany(s => s.Items).Single(i => i.Name == "grass");
-        Assert.True(grassItem is { Unchanged: true, Duplicate: false }, "an unchanged file of the replaced version is not shown as a duplicate");
-        // The unchanged texture is not skipped as a duplicate: it is an update of the old version.
-        var grass = await db.AllAssets.SingleAsync(a => a.ImportSessionId == session && a.Name == "grass", ct);
-        Assert.True(grass.DuplicateOfAssetId is not null && grass.Included);
+        Assert.Equal(oldSource, (await db.Sources.SingleAsync(ct)).Id);
     }
 
     [Fact]
@@ -79,13 +72,12 @@ public class ImportVersionTests
         var (v1, v2) = Packages(kit.Catalog.Dir);
         var (oldSource, rockId) = await CatalogFirstVersionAsync(kit, v1);
         await new SourceTagService(kit.Store).AddAsync(oldSource, ["low poly"], ct: ct);
-        var (session, _) = await kit.ImportAsync(new ImportRequest([v2], Depth: AiDepth.None));
 
-        var commit = await kit.Jobs.WaitAsync(await kit.Imports.ConfirmAsync(session, ct), ct);
+        var (_, job) = await kit.ImportAsync(new ImportRequest([v2], Depth: AiDepth.None));
 
-        Assert.True(commit.State == JobState.Completed, commit.Error);
-        Assert.Contains("\"assets\":3", commit.SummaryJson);
-        Assert.Contains("\"replaced\":1", commit.SummaryJson);
+        Assert.True(job.State == JobState.Completed, job.Error);
+        Assert.Contains("\"assets\":3", job.SummaryJson);
+        Assert.Contains("\"replaced\":1", job.SummaryJson);
         await using var db = kit.Catalog.Db();
         var source = await db.Sources.SingleAsync(ct); // replaced in place, not added
         Assert.Equal(oldSource, source.Id);
@@ -106,32 +98,55 @@ public class ImportVersionTests
         Assert.Equal(0, await db.AllSources.CountAsync(s => s.ImportSessionId != null, ct));
     }
 
+    /// <summary>Spec scenario "User declines replacement": an overlap without a store id replaces nothing.</summary>
     [Fact]
-    public async Task User_declines_replacement()
+    public async Task Overlap_without_store_id_is_imported_as_a_new_source()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var kit = await ImportKit.CreateAsync();
-        var (v1, v2) = Packages(kit.Catalog.Dir, withHeader: false); // matched by GUID overlap: 2 shared of 4 = 0.5
+        var (v1, v2) = Packages(kit.Catalog.Dir, withHeader: false); // GUID overlap only: 2 shared of 4 = 0.5
         var (oldSource, _) = await CatalogFirstVersionAsync(kit, v1);
-        var (session, _) = await kit.ImportAsync(new ImportRequest([v2], Depth: AiDepth.None));
-        await using (var db = kit.Catalog.Db())
-        {
-            var staged = await db.AllSources.SingleAsync(s => s.ImportSessionId == session, ct);
-            Assert.Equal((oldSource, 0.5), (staged.ReplacesSourceId, staged.ReplaceScore));
-            staged.ReplaceAccepted = false;
-            await db.SaveChangesAsync(ct);
-        }
 
-        var commit = await kit.Jobs.WaitAsync(await kit.Imports.ConfirmAsync(session, ct), ct);
+        await kit.CatalogAsync(new ImportRequest([v2], Depth: AiDepth.None));
 
-        Assert.True(commit.State == JobState.Completed, commit.Error);
         await using var check = kit.Catalog.Db();
         Assert.Equal(2, await check.Sources.CountAsync(ct));
         Assert.Equal(["Big Rock", "grass", "old"], (await check.Assets.Where(a => a.SourceId == oldSource).Select(a => a.Name).ToListAsync(ct)).Order(StringComparer.OrdinalIgnoreCase));
-        Assert.Equal(3, await check.Assets.CountAsync(a => a.SourceId != oldSource, ct));
+        // The unchanged grass is a duplicate of the cataloged version, so the new source gets rock and fresh.
+        Assert.Equal(["fresh", "rock"], (await check.Assets.Where(a => a.SourceId != oldSource).Select(a => a.Name).ToListAsync(ct)).Order(StringComparer.OrdinalIgnoreCase));
+        Assert.All(await check.Sources.ToListAsync(ct), s => Assert.Null(s.ReplacesSourceId));
     }
+
     [Fact]
-    public async Task Replacement_confirmed_before_ai_finishes_is_enriched_in_place()
+    public async Task Explicit_update_replaces_without_a_store_id()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var kit = await ImportKit.CreateAsync();
+        var (v1, v2) = Packages(kit.Catalog.Dir, withHeader: false);
+        var (oldSource, rockId) = await CatalogFirstVersionAsync(kit, v1);
+
+        await kit.CatalogAsync(new ImportRequest([v2], Depth: AiDepth.None, ReplaceSourceId: oldSource));
+
+        await using var db = kit.Catalog.Db();
+        Assert.Equal(oldSource, (await db.Sources.SingleAsync(ct)).Id);
+        Assert.Equal(["Big Rock", "fresh", "grass"], (await db.Assets.Select(a => a.Name).ToListAsync(ct)).Order(StringComparer.OrdinalIgnoreCase));
+        Assert.True(await db.Assets.AnyAsync(a => a.Id == rockId, ct));
+    }
+
+    [Fact]
+    public async Task Explicit_update_needs_a_single_input_and_an_existing_source()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var kit = await ImportKit.CreateAsync();
+        var (v1, v2) = Packages(kit.Catalog.Dir);
+        var (oldSource, _) = await CatalogFirstVersionAsync(kit, v1);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => kit.Stager.CreateSessionAsync(new ImportRequest([v1, v2], ReplaceSourceId: oldSource), ct));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => kit.Stager.CreateSessionAsync(new ImportRequest([v2], ReplaceSourceId: oldSource + 100), ct));
+    }
+
+    [Fact]
+    public async Task Replacement_is_committed_before_ai_and_enriched_in_place()
     {
         var ct = TestContext.Current.CancellationToken;
         var chat = new SchemaAwareChatClient();
@@ -140,10 +155,8 @@ public class ImportVersionTests
         var (oldSource, rockId) = await CatalogFirstVersionAsync(kit, v1);
         kit.Ai.Pause();
         var session = await kit.Imports.StartAsync(new ImportRequest([v2]), ct);
-        await kit.WaitReadyAsync(session.Id);
+        await kit.WaitCommittedAsync(session.Id);
 
-        var commit = await kit.Jobs.WaitAsync(await kit.Imports.ConfirmAsync(session.Id, ct), ct);
-        Assert.True(commit.State == JobState.Completed, commit.Error);
         kit.Ai.Resume();
         var import = await kit.Jobs.WaitAsync(session.JobId!.Value, ct);
 
