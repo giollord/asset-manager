@@ -99,7 +99,8 @@ public class SyncResultsTests : BunitContext
             var before = (await kit.Imports.OpenSessionsAsync(Ct)).Select(s => s.Id).DefaultIfEmpty().Max();
             view.Find(button).Click();
             ImportSession? started = null;
-            view.WaitForAssertion(() => Assert.NotNull(started = kit.Imports.OpenSessionsAsync(Ct).Result.FirstOrDefault(s => s.Id > before)));
+            // The session is created before its job is queued: wait for both, or JobId can still be null (seen on CI).
+            view.WaitForAssertion(() => Assert.NotNull(started = kit.Imports.OpenSessionsAsync(Ct).Result.FirstOrDefault(s => s.Id > before && s.JobId is not null)));
             await kit.Jobs.WaitAsync(started!.JobId!.Value, Ct);
             return started;
         }
