@@ -146,7 +146,17 @@ public static class AppPaths
     /// <summary>The cache folder in use for these settings.</summary>
     public static string CacheFor(AppSettings settings) => string.IsNullOrWhiteSpace(settings.CacheFolder) ? DefaultCache : settings.CacheFolder;
     public static string Models => Path.Combine(Root, "models");
-    public static string Temp => Path.Combine(Root, "temp");
+    /// <summary>Short-lived work files (ffmpeg outputs, clipboard exports): see <see cref="TempFor"/>.</summary>
+    public static string Temp => TempFor(Location with { Root = Root });
+
+    /// <summary>
+    /// The temp folder for a data location. A portable copy keeps it on the system drive, like the extraction cache
+    /// (<see cref="DefaultCache"/>): every audio and video preview writes and reads files there, which is slow on a USB
+    /// hard drive, and nothing in it outlives the app. Other locations keep it in their data folder, so an
+    /// overridden data folder (tests, a second instance) stays self-contained.
+    /// </summary>
+    public static string TempFor(AppDataLocation location) =>
+        Path.Combine(location.Mode == DataMode.Portable ? AppDataLocation.DevelopmentRoot : location.Root, "temp");
     /// <summary>Files staged for the clipboard or other short-lived exports.</summary>
     public static string Export => Path.Combine(Temp, "export");
     public static string Logs => Path.Combine(Root, "logs");
