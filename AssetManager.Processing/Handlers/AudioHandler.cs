@@ -54,11 +54,13 @@ public sealed class AudioHandler : AssetTypeHandlerBase
             "-c:a", "libopus", "-b:a", $"{options.AudioBitrateKbps}k", "-f", "ogg", clip,
         ], ct);
 
+        // showwavespic draws nothing (and ffmpeg still exits 0) when the sound has fewer samples than the picture is
+        // wide, e.g. a 10 ms click; apad pads such a sound with silence up to the width.
         var wave = tmp.File("wave.png");
         await Ffmpeg.RunAsync(
         [
             "-i", item.PrimaryPath, "-filter_complex",
-            $"aformat=channel_layouts=mono,showwavespic=s={options.WaveformWidth}x{options.WaveformHeight}:colors=0x5C6BC0",
+            $"aformat=channel_layouts=mono,apad=whole_len={options.WaveformWidth},showwavespic=s={options.WaveformWidth}x{options.WaveformHeight}:colors=0x5C6BC0",
             "-frames:v", "1", wave,
         ], ct);
 

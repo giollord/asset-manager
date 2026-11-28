@@ -73,6 +73,22 @@ public class AudioHandlerTests
         Assert.Equal("opus", codec);
     }
 
+    /// <summary>A 10 ms click has fewer samples than the waveform is wide; ffmpeg drew nothing for it before.</summary>
+    [Fact]
+    public async Task Click_shorter_than_the_waveform_width_gets_all_previews()
+    {
+        using var dir = FixtureBuilder.TempDir();
+        var item = ImageHandlerTests.Item(await ToneAsync(dir, "click.wav", 0.01), AssetType.Audio);
+
+        var result = await Processor.ProcessAsync(item, new PreviewOptions());
+
+        Assert.Null(result.Error);
+        var wave = Assert.Single(result.Previews, p => p.Kind == PreviewKind.Waveform);
+        using (var img = new MagickImage(wave.Bytes)) Assert.Equal(new PreviewOptions().WaveformWidth, (int)img.Width);
+        Assert.Single(result.Previews, p => p.Kind == PreviewKind.Spectrogram);
+        Assert.Single(result.Previews, p => p.Kind == PreviewKind.AudioClip);
+    }
+
     [Fact]
     public async Task Custom_audio_clip_length()
     {
